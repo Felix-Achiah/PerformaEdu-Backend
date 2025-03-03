@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: user_auth
+Version: 0.1.0
+Summary: A reusable user authentication app for Django projects.
+Author: Achiah Ekow Felix
+Author-email: felixachiah@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: Framework :: Django
+Classifier: Operating System :: OS Independent

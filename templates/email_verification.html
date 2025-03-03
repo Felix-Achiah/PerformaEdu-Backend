@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Email Verification</title>
+    <style>
+        /* CSS styles for the button */
+        .verification-button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff; /* Change the background color as desired */
+            color: #fff; /* Change the text color as desired */
+            text-decoration: none;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <p>Hi {{ user.username }},</p>
+    <p>Click the following button to verify your email:</p>
+    <p><a class="verification-button" href="{{ verification_url }}">Verify Email</a></p>
+
+</body>
+</html>

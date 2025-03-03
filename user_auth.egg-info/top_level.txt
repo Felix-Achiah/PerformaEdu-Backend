@@ -1,0 +1,11 @@
+announcements
+calendar_events
+class_info
+edu_performance_monitoring_app
+events
+headmaster
+notifications
+school
+student_performance
+teachers
+user_auth
