@@ -71,6 +71,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'school.middleware.SubdomainMiddleware',
 ]
 
 ROOT_URLCONF = 'edu_performance_monitoring_app.urls'

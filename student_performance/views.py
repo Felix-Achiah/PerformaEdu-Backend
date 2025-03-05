@@ -1518,25 +1518,48 @@ def delete_timetable(request, pk):
 
 
 class AssessmentNameListCreateView(APIView):
-    permission_classes = [IsAssignedTeacher]  # Teachers can create, all authenticated can list
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        """List all assessment names"""
-        assessment_names = AssessmentName.objects.all()
+        """List all assessment names created by admin (teacher=null)"""
+        assessment_names = AssessmentName.objects.filter(teacher__isnull=True)  # Only admin-created
         serializer = AssessmentNameSerializer(assessment_names, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        """Create a new assessment name"""
-        data = request.data.copy()
-        data['teacher'] = request.user.id  # Set the teacher to the authenticated user
-        
-        serializer = AssessmentNameSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            logger.info(f"Assessment name '{serializer.data['name']}' created by {request.user.username}")
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        """Create multiple assessment names"""
+        data = request.data
+        if not isinstance(data, list):  # Handle single object for backward compatibility
+            data = [data]
+
+        # Admins create standard names; teachers need class/subject
+        is_admin = request.user.roles.filter(name='Admin').exists()  # Adjust role check
+        created_assessments = []
+        errors = []
+
+        for item in data:
+            item_data = item.copy()
+            if is_admin:
+                item_data['teacher'] = None
+                item_data.setdefault('class_id', None)
+                item_data.setdefault('subject', None)
+            else:
+                if 'class_id' not in item_data or 'subject' not in item_data:
+                    errors.append({"error": "class_id and subject are required for teachers.", "item": item})
+                    continue
+                item_data['teacher'] = request.user.id
+
+            serializer = AssessmentNameSerializer(data=item_data)
+            if serializer.is_valid():
+                serializer.save()
+                created_assessments.append(serializer.data)
+                logger.info(f"Assessment name '{serializer.data['name']}' created by {request.user.username if not is_admin else 'Admin'}")
+            else:
+                errors.append(serializer.errors)
+
+        if errors:
+            return Response({"created": created_assessments, "errors": errors}, status=status.HTTP_207_MULTI_STATUS)
+        return Response(created_assessments, status=status.HTTP_201_CREATED)
 
 class AssessmentNameDetailView(APIView):
     permission_classes = [IsAdminOrAssignedTeacher]  # Admins or assigned teachers can edit/delete
