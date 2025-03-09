@@ -1,20 +1,24 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
+from school.models import School, Campus
+
 
 class Role(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
 
     def __str__(self):
-        return self.name
+        return f"{self.name}"
 
 
 class User(AbstractUser):
     id = models.AutoField(primary_key=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_users', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_users', null=True, blank=True)
     email = models.EmailField(unique=True, null=True, blank=True)
     password = models.CharField(max_length=255)
     passcode = models.CharField(max_length=255, null=True, blank=True)
-    username = models.CharField(max_length=255, null=True, default='Jim Berk')
+    username = models.CharField(max_length=255, null=True, blank=True)
     phone = models.CharField(null=True, max_length=255, blank=True)
     profile_picture = models.ImageField(upload_to='profile-picture/', null=True, blank=True)
     cover_picture = models.ImageField(upload_to='cover-picture/', null=True, blank=True)
@@ -36,7 +40,7 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ['password']
 
     def __str__(self):
-        return self.id
+        return self.email or self.username or str(self.id)
 
     def has_role(self, role_name):
         return self.roles.filter(name=role_name).exists()

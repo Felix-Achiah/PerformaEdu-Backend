@@ -10,26 +10,33 @@ from rest_framework.decorators import api_view
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework import status, permissions
+from rest_framework import status, permissions, generics
+from rest_framework.mixins import (
+    ListModelMixin, 
+    CreateModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin
+)
 
 from .assign_grade import assign_grade
 from .consolidate_subject_data import consolidate_subject_data
 from .get_position_suffix import get_position_suffix
-from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher
-from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName
+from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsTeacherOrAdmin, IsAdmin, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus
+from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName, Level, Terms
 from user_auth.models import User, Role
 from user_auth.serializers import UserSerializer
-from .serializers import ClassSerializer, SubjectSerializer, TeacherLevelClassSerializer, StudentSerializer, AssessmentSerializer, PromoteStudentsSerializer, ClassEnrollmentSerializer, SubjectPerformanceSerializer, TopicPerformanceSerializer, ProcessedMarksSerializer, StudentParentRelationSerializer, TimeTableSerializer, AssessmentNameSerializer
+from .serializers import ClassSerializer, SubjectSerializer, TeacherLevelClassSerializer, StudentSerializer, AssessmentSerializer, PromoteStudentsSerializer, ClassEnrollmentSerializer, SubjectPerformanceSerializer, TopicPerformanceSerializer, ProcessedMarksSerializer, StudentParentRelationSerializer, TimeTableSerializer, AssessmentNameSerializer, LevelSerializer, TermsSerializer
 from administrator.models import AcademicYear
+from school.models import School, Campus
 
 logger = logging.getLogger(__name__)
 
 '''CRUD endpoints for Class'''
 # Create endpoint
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def create_class(request):
-    print(request.user)
     # Check if the request data is a single class or a list of classes
     is_many = isinstance(request.data, list)
     
@@ -46,11 +53,10 @@ def create_class(request):
 
 # Retrieve all classes created
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus | IsTeacherOrAdminInSchoolOrCampus])
 def get_all_classes(request):
-    print(request.data)
     if request.method == 'GET':
-        level_type = request.query_params.get('level_type')  # Assuming the level type is passed as a query parameter
+        level_type = request.query_params.get('level')  # Assuming the level type is passed as a query parameter
 
         if level_type:
             # Filter classes based on the level type
@@ -1608,3 +1614,142 @@ class AssessmentNameDetailView(APIView):
         assessment_name.delete()
         logger.info(f"Assessment name '{assessment_name.name}' deleted by {request.user.username}")
         return Response({"message": "Assessment name deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+    
+# View to handle CRUD operations for the Level model
+class LevelCRUDView(
+    generics.GenericAPIView,
+    ListModelMixin,
+    CreateModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin
+):
+    """
+    CRUD operations for Level model with tenancy restrictions.
+    """
+    queryset = Level.objects.all()
+    serializer_class = LevelSerializer
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:  # Superusers see all
+            if user.school:
+                queryset = queryset.filter(school=user.school)
+            if user.campus:
+                queryset = queryset.filter(campus=user.campus)
+        return queryset
+
+    def get(self, request, *args, **kwargs):
+        if 'pk' in kwargs:
+            return self.retrieve(request, *args, **kwargs)
+        return self.list(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        is_many = isinstance(data, list)
+        if not data:
+            return Response({"error": "No data provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=data, many=is_many)
+        serializer.is_valid(raise_exception=True)
+        
+        self.perform_create(serializer)
+        
+        if is_many:
+            created_names = [item['name'] for item in serializer.data]
+            logger.info(f"Levels {created_names} created by {request.user}")
+        else:
+            logger.info(f"Level '{serializer.data['name']}' created by {request.user}")
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        instance = self.get_object()
+        logger.info(f"Level '{instance.name}' deleted by {request.user}")
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def perform_update(self, serializer):
+        serializer.save()
+        logger.info(f"Level '{serializer.instance.name}' updated by {self.request.user}")
+
+
+# View to handle CRUD operations for the Terms model
+class TermsCRUDView(
+    generics.GenericAPIView,
+    ListModelMixin,
+    CreateModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin
+):
+    """
+    CRUD operations for Terms model with tenancy restrictions.
+    """
+    queryset = Terms.objects.all()
+    serializer_class = TermsSerializer
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:  # Superusers see all
+            if user.school:
+                queryset = queryset.filter(school=user.school)
+            if user.campus:
+                queryset = queryset.filter(campus=user.campus)
+        return queryset
+
+    def get(self, request, *args, **kwargs):
+        if 'pk' in kwargs:
+            return self.retrieve(request, *args, **kwargs)
+        return self.list(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        is_many = isinstance(data, list)
+        if not data:
+            return Response({"error": "No data provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=data, many=is_many)
+        serializer.is_valid(raise_exception=True)
+        
+        self.perform_create(serializer)
+        
+        if is_many:
+            created_names = [item['name'] for item in serializer.data]
+            logger.info(f"Terms {created_names} created by {request.user}")
+        else:
+            logger.info(f"Terms '{serializer.data['name']}' created by {request.user}")
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        instance = self.get_object()
+        logger.info(f"Terms '{instance.name}' deleted by {request.user}")
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def perform_update(self, serializer):
+        serializer.save()
+        logger.info(f"Terms '{serializer.instance.name}' updated by {self.request.user}")

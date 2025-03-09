@@ -1,27 +1,81 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
-from .models import Class, TeacherLevelClass, TeacherAssignmentHistory , Subject, Assessment, ClassEnrollment, Student, HistoricalClassEnrollment, SubjectPerformance, ProcessedMarks, StudentParentRelation, TimeTable, AssessmentName
+from .models import Class, TeacherLevelClass, TeacherAssignmentHistory , Subject, Assessment, ClassEnrollment, Student, HistoricalClassEnrollment, SubjectPerformance, ProcessedMarks, Level, Terms, StudentParentRelation, TimeTable, AssessmentName
 from user_auth.serializers import UserSerializer
+from school.serializers import SchoolSerializer, CampusSerializer
 
 User = get_user_model()
 
 
+class LevelSerializer(serializers.ModelSerializer):
+    school_name = serializers.CharField(source='school.name', read_only=True)
+    campus_name = serializers.CharField(source='campus.name', read_only=True)
+
+    class Meta:
+        model = Level
+        fields = ['id', 'school', 'school_name', 'campus', 'campus_name', 'name']
+        extra_kwargs = {
+            'school': {'required': False},  # Optional, can be null
+            'campus': {'required': False},  # Optional, can be null
+        }
+
+    def create(self, validated_data):
+        return Level.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        instance.school = validated_data.get('school', instance.school)
+        instance.campus = validated_data.get('campus', instance.campus)
+        instance.name = validated_data.get('name', instance.name)
+        instance.save()
+        return instance
+
+
+class TermsSerializer(serializers.ModelSerializer):
+    school_name = serializers.CharField(source='school.name', read_only=True)
+    campus_name = serializers.CharField(source='campus.name', read_only=True)
+
+    class Meta:
+        model = Terms
+        fields = ['id', 'school', 'school_name', 'campus', 'campus_name', 'name']
+        extra_kwargs = {
+            'school': {'required': False},  # Optional, can be null
+            'campus': {'required': False},  # Optional, can be null
+        }
+
+    def create(self, validated_data):
+        return Terms.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        instance.school = validated_data.get('school', instance.school)
+        instance.campus = validated_data.get('campus', instance.campus)
+        instance.name = validated_data.get('name', instance.name)
+        instance.save()
+        return instance
+
+
 class ClassSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)  # Serialize school
+    campus = CampusSerializer(read_only=True)  # Serialize campus
+    level = serializers.CharField(source='level_type', read_only=True)  # Rename level_type to level
     class Meta:
         model = Class
-        fields = '__all__'
+        fields = ['id', 'name', 'level_type', 'level', 'school', 'campus', 'created_at', 'updated_at']
 
 
 class ClassEnrollmentSerializer(serializers.ModelSerializer):
     student = UserSerializer()
+    school = SchoolSerializer(read_only=True)  # Serialize school
+    campus = CampusSerializer(read_only=True)  # Serialize campus
+    level = LevelSerializer(read_only=True)  # Serialize level
+    term = TermsSerializer(read_only=True)  # Serialize terms
     class_name = serializers.SerializerMethodField()
     academic_year = serializers.SerializerMethodField()
     level_type = serializers.CharField(source='class_id.level_type', allow_null=True)
 
     class Meta:
         model = ClassEnrollment
-        fields = ['id', 'student', 'class_id', 'class_name', 'academic_year', 'status', 'level_type']
+        fields = ['id', 'student', 'class_id', 'class_name', 'academic_year', 'status', 'level_type', 'level', 'term', 'school', 'campus', 'created_at', 'updated_at']
 
     def get_class_name(self, obj):
         return obj.class_id.name if obj.class_id else None
@@ -32,11 +86,15 @@ class ClassEnrollmentSerializer(serializers.ModelSerializer):
         return None
 
 class HistoricalClassEnrollmentSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
+    term = TermsSerializer(read_only=True)
+    student = UserSerializer()
     class_name = serializers.SerializerMethodField()
 
     class Meta:
         model = HistoricalClassEnrollment
-        fields = ['id', 'student', 'class_enrolled', 'class_name', 'academic_year']
+        fields = ['id', 'student', 'class_enrolled', 'class_name', 'academic_year', 'term', 'school', 'campus']
 
     def get_class_name(self, obj):
         return obj.class_enrolled.name
@@ -69,12 +127,6 @@ class StudentSerializer(serializers.ModelSerializer):
         return student
 
 
-class ParentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'email']
-
-
 class StudentParentRelationSerializer(serializers.ModelSerializer):
     student = UserSerializer()
     parent = UserSerializer()
@@ -91,14 +143,18 @@ class SimpleStudentSerializer(serializers.ModelSerializer):
 
 
 class SubjectSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     class_name = serializers.CharField(source='class_id.name', read_only=True)  # Add the class name
 
     class Meta:
         model = Subject
-        fields = ['id', 'name', 'class_id', 'class_name']
+        fields = ['id', 'name', 'class_id', 'class_name', 'school', 'campus', 'created_at', 'updated_at']
 
 
 class TeacherLevelClassSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     class_id = serializers.IntegerField(source='class_id.id', read_only=True)  # Ensure class_id is always included
     class_name = serializers.CharField(source='class_id.name', read_only=True)  # Ensure class name is always included
     subjects_taught = serializers.PrimaryKeyRelatedField(
@@ -112,7 +168,7 @@ class TeacherLevelClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeacherLevelClass
-        fields = ['id', 'teacher', 'teacher_name', 'class_id', 'class_name', 'subjects_taught', 'subjects_taught_details', 'is_main_teacher']
+        fields = ['id', 'teacher', 'teacher_name', 'class_id', 'class_name', 'subjects_taught', 'subjects_taught_details', 'is_main_teacher', 'school', 'campus', 'created_at', 'updated_at']
 
     def create(self, validated_data):
         subjects = validated_data.pop('subjects_taught')
@@ -131,17 +187,21 @@ class TeacherLevelClassSerializer(serializers.ModelSerializer):
 
 
 class TeacherAssignmentHistorySerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     subjects_taught_details = SubjectSerializer(source='subjects_taught', many=True, read_only=True)
     teacher_name = serializers.CharField(source='teacher.username', read_only=True)
     class_name = serializers.CharField(source='class_id.name', read_only=True)
 
     class Meta:
         model = TeacherAssignmentHistory
-        fields = ['id', 'teacher_name', 'class_name', 'subjects_taught_details', 'unassigned_at']
+        fields = ['id', 'teacher_name', 'class_name', 'subjects_taught_details', 'unassigned_at', 'school', 'campus']
 
 
 
 class AssessmentSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     student_name = serializers.SerializerMethodField()
     class_name = serializers.SerializerMethodField()
     teacher_name = serializers.SerializerMethodField()
@@ -156,7 +216,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
             'obtained_marks', 'teacher_id', 'teacher_name', 'subject_id', 
             'subject_name', 'date', 'student_id', 'student_name', 
             'class_id', 'class_name', 'assessment_name_id', 'assessment_name_display'
-            'comments', 'created_at', 'updated_at'
+            'comments', 'school', 'campus', 'created_at', 'updated_at'
         ]
 
     def get_student_name(self, obj):
@@ -185,6 +245,8 @@ class AssessmentSerializer(serializers.ModelSerializer):
 
 
 class SubjectPerformanceSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     student_name = serializers.SerializerMethodField()
     subject_name = serializers.SerializerMethodField()
     class_name = serializers.SerializerMethodField()
@@ -197,9 +259,9 @@ class SubjectPerformanceSerializer(serializers.ModelSerializer):
             'student', 'student_name',           # Student ID and name
             'subject', 'subject_name',           # Subject ID and name
             'class_id', 'class_name',            # Class ID and name
-            'academic_year', 'academic_year_display',  # Academic year ID and display
+            'academic_year', 'academic_year_display',
             'term_id', 'term_name',              # Term ID and name
-            'average_score'
+            'average_score', 'school', 'campus'
         ]
 
     def get_student_name(self, obj):
@@ -259,36 +321,36 @@ class TopicPerformanceSerializer(serializers.Serializer):
     average_score = serializers.DecimalField(max_digits=5, decimal_places=2)
     assessment_type = serializers.CharField()
     semester = serializers.CharField()
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
 
 
 class ProcessedMarksSerializer(serializers.ModelSerializer):
-    student = SimpleStudentSerializer(read_only=True)  # Simplified student serializer
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
+    student = UserSerializer(read_only=True)  # Simplified student serializer
     class_ = ClassSerializer(read_only=True)  # Proper reference to the Class model using ClassSerializer
 
     class Meta:
         model = ProcessedMarks
-        fields = ['student', 'class_', 'semester', 'total_score', 'status', 'subject_data', 'position', 'created_at']
-
-
-class TeacherSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(read_only=True)
-
-    class Meta:
-        model = User  # Use the User model directly
-        fields = ['id', 'username']
+        fields = ['student', 'class_', 'semester', 'total_score', 'status', 'subject_data', 'position', 'school', 'campus' 'created_at']
 
 
 class TimeTableSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     subject = SubjectSerializer(read_only=True)  # Include subject details
-    teacher = TeacherSerializer(read_only=True)  # Include teacher details
+    teacher = UserSerializer(read_only=True)  # Include teacher details
 
     class Meta:
         model = TimeTable
-        fields = ['id', 'class_id', 'subject', 'teacher', 'day', 'start_time', 'end_time']
+        fields = ['id', 'class_id', 'subject', 'teacher', 'day', 'start_time', 'end_time', 'school', 'campus', 'created_at', 'updated_at']
 
         
 class AssessmentNameSerializer(serializers.ModelSerializer):
+    school = SchoolSerializer(read_only=True)
+    campus = CampusSerializer(read_only=True)
     class Meta:
         model = AssessmentName
-        fields = ['id', 'name', 'class_id', 'subject', 'teacher', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'class_id', 'subject', 'teacher', 'created_at', 'school', 'campus', 'updated_at']
         read_only_fields = ['teacher', 'created_at', 'updated_at']  # Teacher set by view, timestamps auto-managed

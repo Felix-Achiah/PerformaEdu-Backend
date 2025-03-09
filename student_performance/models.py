@@ -21,16 +21,16 @@ LEVEL_TYPE_CHOICES = [
 ]
 
 class Level(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='levels', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='levels', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_levels', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_levels', null=True, blank=True)
     name = models.CharField(max_length=100)
 
     def __str__(self):
         return self.name
 
 class Terms(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='terms', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='terms', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='schoo_terms', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='school_terms', null=True, blank=True)
     name = models.CharField(max_length=100)
 
     def __str__(self):
@@ -40,25 +40,29 @@ class Class(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_classes', null=True, blank=True) # All classes in the school
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_classes', null=True, blank=True)
     name = models.CharField(max_length=100)
-    level_type = models.ForeignKey(Level, on_delete=models.CASCADE)
+    level_type = models.CharField(max_length=50 , null=True, blank=True)
+    level = models.ForeignKey(Level, on_delete=models.CASCADE, related_name='classes', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     
     def __str__(self):
         return self.name
     
 
 class Subject(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='subjects', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='subjects', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_subjects', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_subjects', null=True, blank=True)
     name = models.CharField(max_length=100)
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return self.name
 
 
 class TeacherLevelClass(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='teacher_level_class', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='teacher_level_class', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_teacher_level_class', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_teacher_level_class', null=True, blank=True)
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -75,6 +79,8 @@ class TeacherLevelClass(models.Model):
         blank=True  # Allow no subjects
     )
     is_main_teacher = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f'{self.teacher.username} - Class: {self.class_id.name}, Main Teacher: {self.is_main_teacher}'
@@ -88,8 +94,8 @@ class TeacherLevelClass(models.Model):
 
 
 class TeacherAssignmentHistory(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='teacher_assignment_history', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='teacher_assignment_history', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_teacher_assignment_history', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_teacher_assignment_history', null=True, blank=True)
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE)
     subjects_taught = models.ManyToManyField('Subject')
@@ -124,8 +130,8 @@ class Student(models.Model):
         return None
     
 class StudentParentRelation(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='student_parent_relation', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='student_parent_relation', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_student_parent_relation', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_student_parent_relation', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         limit_choices_to={'roles__name': 'Student'},
@@ -138,7 +144,8 @@ class StudentParentRelation(models.Model):
         on_delete=models.CASCADE,
         related_name="children_relations"  # Add related_name to avoid clashes
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -151,8 +158,8 @@ class StudentParentRelation(models.Model):
 
 
 class AssessmentName(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='assessment_names', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='assessment_names', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_assessment_names', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_assessment_names', null=True, blank=True)
     name = models.CharField(max_length=255)
     class_id = models.ForeignKey(
         Class,
@@ -175,8 +182,8 @@ class AssessmentName(models.Model):
         null=True,  # Allow null for system-wide assessments
         blank=True
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     class Meta:
         unique_together = ('name', 'class_id', 'subject', 'teacher')  # Unique per teacher-subject-class combo
@@ -186,8 +193,8 @@ class AssessmentName(models.Model):
 
 
 class Assessment(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='assessments', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='assessments', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_assessments', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_assessments', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         limit_choices_to={'roles__name': 'Student'},  
@@ -212,40 +219,41 @@ class Assessment(models.Model):
         blank=True
     )
     assessment_type = models.CharField(max_length=20)
-    term_id = models.ForeignKey(Terms, on_delete=models.CASCADE, null=True, blank=True)
+    term = models.ForeignKey(Terms, on_delete=models.CASCADE, null=True, blank=True)
     total_marks = models.DecimalField(max_digits=5, decimal_places=2)
     obtained_marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     date = models.DateField(null=True, blank=True)
     created_at = models.DateField(auto_now_add=True, null=True, blank=True)
-    updated_at = models.DateField(auto_now=True)
+    updated_at = models.DateField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.subject.name} - {self.assessment_type} - {self.term_id} - {self.date}"
 
 
 class ProcessedMarks(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='processed_marks', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='processed_marks', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_processed_marks', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_processed_marks', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         limit_choices_to={'roles__name': 'Student'},  
         on_delete=models.CASCADE
     )
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE)
-    term_id = models.ForeignKey(Terms, on_delete=models.SET_NULL, null=True, blank=True)
+    term = models.ForeignKey(Terms, on_delete=models.SET_NULL, null=True, blank=True)
     total_score = models.DecimalField(max_digits=5, decimal_places=2)
     status = models.CharField(max_length=20)
     subject_data = models.JSONField()  
     position = models.CharField(max_length=10, blank=True)  
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.student.username} - {self.class_id.name} - {self.semester}"
 
 
 class SubjectPerformance(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='subject_performance', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='subject_performance', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_subject_performance', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_subject_performance', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         limit_choices_to={'roles__name': 'Student'},  
@@ -254,7 +262,7 @@ class SubjectPerformance(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, null=True, blank=True)
-    term_id = models.ForeignKey(Terms, on_delete=models.SET_NULL, null=True, blank=True)
+    term = models.ForeignKey(Terms, on_delete=models.SET_NULL, null=True, blank=True)
     average_score = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
 
     def __str__(self):
@@ -268,8 +276,8 @@ class ClassEnrollment(models.Model):
         ('repeated', 'Repeated'),
     ]
 
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='class_enrollment', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='class_enrollment', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_class_enrollment', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_class_enrollment', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         related_name='class_enrollment', 
@@ -278,17 +286,18 @@ class ClassEnrollment(models.Model):
     )
     class_id = models.ForeignKey(Class, on_delete=models.SET_NULL, null=True)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, null=True, blank=True)
+    term = models.ForeignKey(Terms, on_delete=models.CASCADE, null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='existing')
     created_at = models.DateField(auto_now_add=True, null=True, blank=True)
-    updated_at = models.DateField(auto_now=True)
+    updated_at = models.DateField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.student.username} - {self.class_id.name} ({self.academic_year})"
 
 
 class HistoricalClassEnrollment(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='historical_class_enrollment', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='historical_class_enrollment', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_historical_class_enrollment', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_historical_class_enrollment', null=True, blank=True)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         related_name='historical_class_enrollment', 
@@ -297,14 +306,17 @@ class HistoricalClassEnrollment(models.Model):
     )
     class_enrolled = models.ForeignKey(Class, on_delete=models.CASCADE)
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, null=True, blank=True)
+    term = models.ForeignKey(Terms, on_delete=models.CASCADE, null=True, blank=True)
+    created_at = models.DateField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
-        return f"{self.student.username} - {self.class_enrolled.name} - {self.academic_year}"
+        return f"{self.student.username} - {self.class_enrolled.name} - {self.academic_year} - {self.term}"
 
 
 class HistoricalAssessmentResult(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='historical_assessment_result', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='historical_assessment_result', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_historical_assessment_result', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_historical_assessment_result', null=True, blank=True)
     historical_class_enrollment = models.ForeignKey(HistoricalClassEnrollment, on_delete=models.CASCADE)
     assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE)
 
@@ -313,14 +325,16 @@ class HistoricalAssessmentResult(models.Model):
 
 
 class TimeTable(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='timetables', null=True, blank=True)
-    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='timetables', null=True, blank=True)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_timetables', null=True, blank=True)
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_timetables', null=True, blank=True)
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE, related_name="timetables")
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, null=True, blank=True)
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
     day = models.CharField(max_length=20)  # e.g., "Monday"
     start_time = models.TimeField()
     end_time = models.TimeField()
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     def __str__(self):
         return f"{self.class_id.name} - {self.subject.name} on {self.day}"

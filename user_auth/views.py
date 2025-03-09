@@ -30,6 +30,7 @@ from django.db.models import Q
 from django.db import transaction
 
 from .models import User, Role
+from school.models import School, Campus
 from .serializers import UserSerializer, PasswordResetSerializer
 from student_performance.serializers import TeacherLevelClassSerializer, StudentSerializer, ClassEnrollment, HistoricalClassEnrollment, Class, StudentParentRelationSerializer
 from student_performance.models import TeacherLevelClass, Student, StudentParentRelation, ClassEnrollment, HistoricalClassEnrollment, Class
@@ -59,7 +60,9 @@ def sign_up(request):
             email = user_data.get('email')
             username = user_data.get('username')
             role_names = user_data.get('roles', [])
-            if isinstance(role_names, str):  
+            school_name = user_data.get('school_name')  # Extract school name
+            campus_name = user_data.get('campus_name')  # Extract campus name
+            if isinstance(role_names, str):
                 role_names = [role_names]
 
             # Check if user already exists by email or username
@@ -68,13 +71,46 @@ def sign_up(request):
                 skipped_users.append({'email': email, 'username': username, 'reason': 'User already exists'})
                 continue
 
+            # Fetch School and Campus IDs based on names
+            school = None
+            campus = None
+            if school_name:
+                try:
+                    school = School.objects.get(name=school_name)
+                except School.DoesNotExist:
+                    skipped_users.append({
+                        'email': email,
+                        'username': username,
+                        'reason': f"School '{school_name}' not found"
+                    })
+                    continue
+
+            if campus_name:
+                try:
+                    campus = Campus.objects.get(name=campus_name, school=school if school else None)
+                except Campus.DoesNotExist:
+                    skipped_users.append({
+                        'email': email,
+                        'username': username,
+                        'reason': f"Campus '{campus_name}' not found" + (f" in school '{school_name}'" if school else "")
+                    })
+                    continue
+
+            # Validate roles
+            roles = Role.objects.filter(name__in=role_names)
+            if not roles.exists() and role_names:
+                skipped_users.append({
+                    'email': email,
+                    'username': username,
+                    'reason': f"Roles {role_names} not found"
+                })
+                continue
+
             # Generate a default password
             default_password = generate_default_password()
-           
-            
-            roles = Role.objects.filter(name__in=role_names)
+
             with transaction.atomic():
-                 # Create the user
+                # Create the user with school and campus IDs
                 user = User.objects.create(
                     email=email,
                     username=username,
@@ -82,13 +118,18 @@ def sign_up(request):
                     phone=user_data.get('phone'),
                     gender=user_data.get('gender'),
                     location=user_data.get('location'),
+                    passcode=default_password,  # Store plain password
+                    school=school,  # Assign School instance
+                    campus=campus   # Assign Campus instance
                 )
                 user.roles.set(roles)
-
                 created_users.append(user)
 
-            # Send the default password to the user's email (optional)
-            # You can implement email sending logic here if needed
+            # Log success
+            logger.info(f"User '{email}' created with school '{school_name}' and campus '{campus_name}'")
+
+            # Send default password to email (optional)
+            # Example: send_email(user.email, "Your Password", f"Your default password is: {default_password}")
 
         # Serialize the created users
         serializer = UserSerializer(created_users, many=True)
@@ -101,6 +142,7 @@ def sign_up(request):
         return Response(data=response_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
+        logger.error(f"Error in sign_up: {str(e)}")
         return Response(data={'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -126,6 +168,8 @@ class RegisterStudentsAndParentsView(APIView):
                 for entry in data:
                     parent_data = entry.get('parent', {})
                     student_data = entry.get('student', {})
+                    school_name = entry.get('school_name')  # Extract school name
+                    campus_name = entry.get('campus_name')  # Extract campus name
 
                     if not parent_data or not student_data:
                         return Response(
@@ -174,39 +218,70 @@ class RegisterStudentsAndParentsView(APIView):
                             "reason": "Both parent and student already exist"
                         })
                         continue  # Skip this pair
+                    
+                    # Fetch School and Campus IDs based on names
+                    school = None
+                    campus = None
+                    if school_name:
+                        try:
+                            school = School.objects.get(name=school_name)
+                        except School.DoesNotExist:
+                            users_skipped.append({
+                                'parent': {"email": parent_email, "username": parent_username},
+                                'student': {"email": student_email, "username": student_username},
+                                'reason': f"School '{school_name}' not found"
+                            })
+                            continue
+                    
+                    if campus_name:
+                        try:
+                            campus = Campus.objects.get(name=campus_name, school=school if school else None)
+                        except Campus.DoesNotExist:
+                            users_skipped.append({
+                                'parent': {"email": parent_email, "username": parent_username},
+                                'student': {"email": student_email, "username": student_username},
+                                'reason': f"Campus '{campus_name}' not found" + (f" in school '{school_name}'" if school else "")
+                            })
+                            continue
 
                     # Generate a default password for both parent & student
                     default_password = get_random_string(8)
 
                     # CREATE PARENT USER (if not exists)
                     if not existing_parent:
-                        parent = User.objects.create(
-                            email=parent_email if parent_email else None,
-                            username=parent_username,
-                            phone=parent_data.get('phone'),
-                            passcode=default_password,  # Store plain password
-                            password=make_password(default_password),  # Store hashed password
-                            gender=parent_data.get('gender'),
-                            location=parent_data.get('location'),
-                        )
-                        parent_role, _ = Role.objects.get_or_create(name="Parent")
-                        parent.roles.add(parent_role)
+                        with transaction.atomic():
+                            parent = User.objects.create(
+                                email=parent_email if parent_email else None,
+                                username=parent_username,
+                                phone=parent_data.get('phone'),
+                                passcode=default_password,  # Store plain password
+                                password=make_password(default_password),  # Store hashed password
+                                gender=parent_data.get('gender'),
+                                location=parent_data.get('location'),
+                                school=school,
+                                campus=campus 
+                            )
+                            parent_role, _ = Role.objects.get_or_create(name="Parent")
+                            parent.roles.add(parent_role)
                     else:
                         parent = existing_parent
 
                     # CREATE STUDENT USER (if not exists)
                     if not existing_student:
-                        student = User.objects.create(
-                            email=student_email if student_email else None,
-                            username=student_username,
-                            phone=student_data.get('phone'),
-                            passcode=default_password,
-                            password=make_password(default_password),
-                            gender=student_data.get('gender'),
-                            location=student_data.get('location'),
-                        )
-                        student_role, _ = Role.objects.get_or_create(name="Student")
-                        student.roles.add(student_role)
+                        with transaction.atomic():
+                            student = User.objects.create(
+                                email=student_email if student_email else None,
+                                username=student_username,
+                                phone=student_data.get('phone'),
+                                passcode=default_password,
+                                password=make_password(default_password),
+                                gender=student_data.get('gender'),
+                                location=student_data.get('location'),
+                                school=school,
+                                campus=campus
+                            )
+                            student_role, _ = Role.objects.get_or_create(name="Student")
+                            student.roles.add(student_role)
                     else:
                         student = existing_student
 
@@ -317,7 +392,7 @@ def bulk_user_upload(request):
         # Convert all column names to lowercase
         df.columns = df.columns.str.lower()
 
-        required_columns = ['email', 'username', 'phone', 'gender', 'location']
+        required_columns = ['email', 'username', 'phone', 'gender', 'location', 'roles', 'school_name', 'campus_name']
         if not all(column in df.columns for column in required_columns):
             return Response(
                 data={'error': f'File must contain the following columns: {required_columns}'},
@@ -348,6 +423,9 @@ def bulk_user_upload(request):
                 phone=row['phone'],
                 gender=row['gender'],
                 location=row['location'],
+                passcode=default_password,  # Store plain password
+                school=row['school_name'],
+                campus=row['campus_name']
             )
 
             # Assign roles properly
@@ -414,7 +492,7 @@ def bulk_student_parent_upload(request):
 
         required_columns = ['parent_email', 'parent_username', 'parent_phone', 'parent_gender', 'parent_location',
                             'student_email', 'student_username', 'student_phone', 'student_gender', 'student_location',
-                            'class_name', 'academic_year']
+                            'class_name', 'academic_year', 'school_name', 'campus_name']
         
         if not all(column in df.columns for column in required_columns):
             return Response(
@@ -440,6 +518,9 @@ def bulk_student_parent_upload(request):
                 student_phone = row.get('student_phone')
                 student_gender = row.get('student_gender')
                 student_location = row.get('student_location')
+
+                school_name = row.get('school_name')
+                campus_name = row.get('campus_name')
 
                 class_name = str(row.get('class_name')).strip() if pd.notna(row.get('class_name')) else None
                 academic_year = row.get('academic_year')
@@ -494,6 +575,8 @@ def bulk_student_parent_upload(request):
                         location=parent_location,
                         passcode=default_password,
                         password=make_password(default_password),
+                        school=school_name,
+                        campus=campus_name
                     )
                     parent_role, _ = Role.objects.get_or_create(name="Parent")
                     parent.roles.add(parent_role)
@@ -510,6 +593,8 @@ def bulk_student_parent_upload(request):
                         location=student_location,
                         passcode=default_password,
                         password=make_password(default_password),
+                        school=school_name,
+                        campus=campus_name
                     )
                     student_role, _ = Role.objects.get_or_create(name="Student")
                     student.roles.add(student_role)
@@ -618,7 +703,6 @@ def verify_email(request, verification_token):
 def login(request):
     email = request.data['email']
     password = request.data['password']
-    print(request.data)
 
     user = User.objects.filter(email=email).first()
 
@@ -644,7 +728,6 @@ def login(request):
 def logout(request):
     try:
         refresh_token = request.data['refresh_token']
-        print(f'Received refresh_token: {refresh_token}')
         if refresh_token:
             token = RefreshToken(refresh_token)
             # print(token)

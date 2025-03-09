@@ -7,9 +7,18 @@ class CustomRefreshToken(RefreshToken):
     @classmethod
     def for_user(cls, user):
         token = super().for_user(user)
+        
+        # Add user details to the token payload
         token['email'] = user.email
-        token['username'] = user.username 
-        token['roles'] = [role.name for role in user.roles.all()] # Add custom claims to the token payload
+        token['username'] = user.username or ''
+        token['roles'] = [role.name for role in user.roles.all()]
+        
+        # Add school and campus details
+        token['school_id'] = user.school_id if user.school else None
+        token['campus_id'] = user.campus_id if user.campus else None
+        token['school_name'] = user.school.name if user.school else None
+        token['campus_name'] = user.campus.name if user.campus else None
+
         return token
 
 def create_jwt_pair_for_user(user: User):

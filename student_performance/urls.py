@@ -1,4 +1,5 @@
 from django.urls import path
+
 from . import views
 
 urlpatterns = [
@@ -8,6 +9,14 @@ urlpatterns = [
     path('get-all-classes/', views.get_all_classes, name='retrieve_class'),
     path('update-class/<int:class_id>/', views.update_class, name='update_class'),
     path('delete-class/<int:class_id>/', views.delete_class, name='delete_class'),
+
+    # API endpoints for Level
+    path('levels/', views.LevelCRUDView.as_view(), name='level-list-create'),
+    path('levels/<int:pk>/', views.LevelCRUDView.as_view(), name='level-detail'),
+
+    # API endpoints for Terms
+    path('terms/', views.TermsCRUDView.as_view(), name='term-list-create'),
+    path('terms/<int:pk>/', views.TermsCRUDView.as_view(), name='term-detail'),
 
     # API endpoints for Subject
     path('get-subjects/', views.subject_list, name='subject_list'),
