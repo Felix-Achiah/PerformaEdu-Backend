@@ -52,7 +52,6 @@ class Subject(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_subjects', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_subjects', null=True, blank=True)
     name = models.CharField(max_length=100)
-    class_id = models.ForeignKey(Class, on_delete=models.CASCADE, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
@@ -211,14 +210,13 @@ class Assessment(models.Model):
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     topic = models.CharField(max_length=200, null=True, blank=True)
     comments = models.TextField(null=True, blank=True)
-    assessment_name_id = models.ForeignKey(
+    assessment_name = models.ForeignKey(
         AssessmentName,
         on_delete=models.SET_NULL,  # Preserve assessment if name is deleted
         related_name='assessments',
         null=True,
         blank=True
     )
-    assessment_type = models.CharField(max_length=20)
     term = models.ForeignKey(Terms, on_delete=models.CASCADE, null=True, blank=True)
     total_marks = models.DecimalField(max_digits=5, decimal_places=2)
     obtained_marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)

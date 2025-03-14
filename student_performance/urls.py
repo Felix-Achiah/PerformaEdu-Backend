@@ -19,18 +19,13 @@ urlpatterns = [
     path('terms/<int:pk>/', views.TermsCRUDView.as_view(), name='term-detail'),
 
     # API endpoints for Subject
-    path('get-subjects/', views.subject_list, name='subject_list'),
-    path('create-subjects/', views.create_subject, name='create_subject'),
-    path('get-subject/<int:subject_id>/', views.subject_detail, name='subject_detail'),
-    path('update-subjects/<int:subject_id>/', views.update_subject, name='update_subject'),
-    path('delete-subjects/<int:subject_id>/', views.delete_subject, name='delete_subject'),
-    path('register-teacher-subjects/', views.register_teacher_subjects, name='register_subjects'),
+    path('subjects/', views.SubjectCRUDView.as_view(), name='subject-list-create'),
+    path('subjects/<int:pk>/', views.SubjectCRUDView.as_view(), name='subject-detail'),
 
     # API endpoints for Student
     path('get-students/', views.get_students_by_class_id, name='get_students_by_class_id'),
     path('get-student/<int:student_id>/', views.get_student, name='get_student'),
     path('update-student/<int:student_id>/', views.update_student, name='update_student'),
-    path('delete-student/<int:student_id>/', views.delete_student, name='delete_student'),
 
     # API endpoints for Student Assessment
     path('create-student-assessments/', views.create_assessments, name='create_assessments'),
@@ -42,18 +37,22 @@ urlpatterns = [
     path('fetch-historical-assessment-data/', views.fetch_historical_assessment_data, name='fetch_historical_assessment_data'),
     path('get-student-exams-assessments/<int:student_id>/<int:subject_id>/<str:assessment_type>/', views.get_student_exams_assessments, name='get_student_exams_assessments'),
     path('update-student-assessments/', views.update_assessments, name='update_assessments'),
-    path('delete-student-assessment/<int:student_id>/<int:assessment_id>/', views.delete_assessment, name='delete_assessment'),
     path('student/<int:student_id>/performance/', views.HistoricalPerformanceView.as_view(), name='student-performance'),
+    
     # Endpoint for fetching exercise and assignment topic performance and comparing them
     path('exercise-assignment-topic-comparison/<int:student_id>/<int:class_id>/<int:subject_id>/<str:semester>/', views.WeightedTopicPerformanceView.as_view(), name='exercise-assignment-topic-comparison'),
+
     # Endpoint for fetching topics in either exercise or assignment and comparing performances in each topic
     path('topic-performance-comparison/<int:student_id>/<int:class_id>/<int:subject_id>/<str:semester>/<str:assessment_type>/', views.TopicPerformanceByTypeView.as_view(), name='topic-performance-comparison'),
+
     # Endpoint for fetching Mid-Term or Final Exam performance data
     path('get-midTerm-final-exam-assessmentData/<int:student_id>/<int:class_id>/<int:subject_id>/<str:assessment_type>/', views.MidTermFinalExamAssessmentComparisonView.as_view(), name='midTerm-final-exam-assessmentData'),
     # path('students-end-of-semester-assessments/<int:class_id>/<str:semester>/', views.ProcessedMarksView.as_view(), name='student-end-of-semester-assessments'),
     path('student-result/<int:class_id>/<int:student_id>/<str:semester>/', views.StudentEndOfSemesterResultView.as_view(), name='student-result'),
+
     # Fetch End of Semester Results by academic year and semester
     path('end-of-semester-results-by-academic-year/', views.SemesterResultsView.as_view(), name='end_of_semester_results'),
+
     # Fetch Historical Subject Performances
     path('historical-subject-performances/<int:student_id>/', views.HistoricalSubjectPerformanceView.as_view(), name='historical-subject-performances'),
 

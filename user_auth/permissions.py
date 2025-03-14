@@ -43,19 +43,30 @@ class IsTeacherOrAdmin(BasePermission):
         )
 
 class IsAssignedTeacher(BasePermission):
+    """
+    Allows access only to teachers assigned to a class.
+    Ensures tenancy by checking if the teacher belongs to the same school and campus.
+    """
     def has_permission(self, request, view):
-        if request.method in SAFE_METHODS:
-            return request.user.is_authenticated
         if not request.user.is_authenticated:
             return False
+
+        # Retrieve class_id from request data
         class_id = request.data.get('class_id')
-        subject_id = request.data.get('subject')
-        if not class_id or not subject_id:
+        if not class_id:
             return False
+
+        # Get user school and campus
+        user = request.user
+        user_school_id = user.school_id
+        user_campus_id = user.campus_id
+
+        # Check if teacher is assigned to the class AND belongs to the same school/campus
         return TeacherLevelClass.objects.filter(
-            teacher=request.user,
+            teacher=user,
             class_id=class_id,
-            subjects_taught=subject_id
+            class_id__school_id=user_school_id,
+            class_id__campus_id=user_campus_id
         ).exists()
 
 class IsAdminOrAssignedTeacher(BasePermission):
@@ -159,5 +170,33 @@ class IsTeacherOrAdminInSchoolOrCampus(IsTeacherOrAdmin, IsRegisteredInSchoolOrC
     def has_object_permission(self, request, view, obj):
         return (
             IsTeacherOrAdmin.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
+        )
+    
+
+class IsHeadmasterInSchoolOrCampus(IsHeadmaster, IsRegisteredInSchoolOrCampus):
+    def has_permission(self, request, view):
+        return (
+            IsHeadmaster.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_permission(self, request, view)
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return (
+            IsHeadmaster.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
+        )
+    
+
+class IsTeacherInSchoolOrCampus(IsTeacher, IsRegisteredInSchoolOrCampus):
+    def has_permission(self, request, view):
+        return (
+            IsTeacher.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_permission(self, request, view)
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return (
+            IsTeacher.has_permission(self, request, view) and
             IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
         )

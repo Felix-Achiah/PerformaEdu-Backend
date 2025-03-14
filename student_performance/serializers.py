@@ -145,11 +145,10 @@ class SimpleStudentSerializer(serializers.ModelSerializer):
 class SubjectSerializer(serializers.ModelSerializer):
     school = SchoolSerializer(read_only=True)
     campus = CampusSerializer(read_only=True)
-    class_name = serializers.CharField(source='class_id.name', read_only=True)  # Add the class name
 
     class Meta:
         model = Subject
-        fields = ['id', 'name', 'class_id', 'class_name', 'school', 'campus', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'school', 'campus', 'created_at', 'updated_at']
 
 
 class TeacherLevelClassSerializer(serializers.ModelSerializer):

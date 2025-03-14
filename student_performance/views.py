@@ -22,7 +22,7 @@ from rest_framework.mixins import (
 from .assign_grade import assign_grade
 from .consolidate_subject_data import consolidate_subject_data
 from .get_position_suffix import get_position_suffix
-from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsTeacherOrAdmin, IsAdmin, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus
+from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsTeacherOrAdmin, IsAdmin, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus, IsHeadmasterInSchoolOrCampus, IsTeacherInSchoolOrCampus
 from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName, Level, Terms
 from user_auth.models import User, Role
 from user_auth.serializers import UserSerializer
@@ -55,57 +55,166 @@ def create_class(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus | IsTeacherOrAdminInSchoolOrCampus])
 def get_all_classes(request):
+    """
+    Retrieve all classes under a specific level, filtered by the user's school_id.
+    Query params:
+    - level: The ID of the Level to filter classes by (required)
+    """
     if request.method == 'GET':
-        level_type = request.query_params.get('level')  # Assuming the level type is passed as a query parameter
+        user = request.user
+        level_id = request.query_params.get('level')  # Expecting level ID, not level_type
 
-        if level_type:
-            # Filter classes based on the level type
-            classes = Class.objects.filter(level_type=level_type)
-            serializer = ClassSerializer(classes, many=True)
-            return Response(serializer.data)
+        # Check if level_id is provided
+        if not level_id:
+            return Response({'error': 'Please provide a level parameter with a valid Level ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Ensure the level exists
+            level = Level.objects.get(id=level_id)
+        except Level.DoesNotExist:
+            return Response({'error': f'Level with ID {level_id} does not exist'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Base queryset for classes under the specified level
+        classes = Class.objects.filter(level=level)
+
+        # Filter by user's school_id from token or user object
+        school_id = request.auth.get('school_id') if request.auth else user.school_id
+        if school_id:
+            classes = classes.filter(school_id=school_id)
         else:
-            return Response({'error': 'Please provide a level_type parameter'}, status=status.HTTP_400_BAD_REQUEST)
+            logger.warning(f"User {user} has no school_id, returning empty class list")
+            classes = classes.none()  # Empty queryset if no school
+
+        # Optionally filter by user's campus_id
+        campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+        if campus_id:
+            classes = classes.filter(campus_id=campus_id)
+
+        # Allow superusers to bypass tenancy filters
+        if user.is_superuser:
+            classes = Class.objects.filter(level=level)
+
+        if not classes.exists():
+            return Response({'message': f'No classes found under Level {level.id} for your school/campus'}, status=status.HTTP_200_OK)
+
+        serializer = ClassSerializer(classes, many=True)
+        logger.info(f"User {user} fetched {classes.count()} classes under Level {level.id}")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    return Response({'error': 'Method not allowed'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 # Retrieve a specific class endpoint
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def retrieve_class(request, class_id):
+    """
+    Retrieve a specific class by ID, ensuring it belongs to the user's school.
+    Args:
+        class_id: The ID of the class to retrieve.
+    """
     try:
+        # Fetch the class
         class_obj = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
         return Response({'error': 'Class not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    # Get user's school_id from token or user object
+    user = request.user
+    school_id = request.auth.get('school_id') if request.auth else user.school_id
+
+    # Enforce tenancy: Check if the class belongs to the user's school
+    if school_id and class_obj.school_id != school_id:
+        logger.warning(f"User {user} attempted to access class {class_id} outside their school {school_id}")
+        return Response({'error': 'You do not have permission to access this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Optionally check campus_id
+    campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+    if campus_id and class_obj.campus_id != campus_id:
+        logger.warning(f"User {user} attempted to access class {class_id} outside their campus {campus_id}")
+        return Response({'error': 'You do not have permission to access this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Serialize and return the class
     serializer = ClassSerializer(class_obj)
-    return Response(serializer.data)
+    logger.info(f"User {user} retrieved class {class_obj.id}")
+    return Response(serializer.data, status=status.HTTP_200_OK)
 
 # Update endpoint
 @api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def update_class(request, class_id):
+    """
+    Update a class, ensuring it belongs to the user's school.
+    Args:
+        class_id: The ID of the class to update.
+    """
     try:
-        print('id', class_id)
         class_obj = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
         return Response({'error': 'Class not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    serializer = ClassSerializer(class_obj, data=request.data)
+    # Get user's school_id and campus_id from token or user object
+    user = request.user
+    school_id = request.auth.get('school_id') if request.auth else user.school_id
+    campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+
+    # Enforce tenancy: Check if the class belongs to the user's school
+    if school_id and class_obj.school_id != school_id:
+        logger.warning(f"User {user} attempted to update class {class_id} outside their school {school_id}")
+        return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Optionally check campus_id
+    if campus_id and class_obj.campus_id != campus_id:
+        logger.warning(f"User {user} attempted to update class {class_id} outside their campus {campus_id}")
+        return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Allow superusers to bypass tenancy restrictions
+    if user.is_superuser:
+        pass  # No additional filtering needed
+
+    # Update the class
+    serializer = ClassSerializer(class_obj, data=request.data, partial=True)  # Use PUT (full update)
     if serializer.is_valid():
         serializer.save()
-        return Response(serializer.data)
+        logger.info(f"User {user} updated class {class_id}")
+        return Response(serializer.data, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # Delete endpoint
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated, IsTeacher])
 def delete_class(request, class_id):
+    """
+    Delete a class, ensuring it belongs to the user's school.
+    Args:
+        class_id: The ID of the class to delete.
+    """
     try:
-        print('id', class_id)
         class_obj = Class.objects.get(id=class_id)
-        print(class_obj)
     except Class.DoesNotExist:
         return Response({'error': 'Class not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    # Get user's school_id and campus_id from token or user object
+    user = request.user
+    school_id = request.auth.get('school_id') if request.auth else user.school_id
+    campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+
+    # Enforce tenancy: Check if the class belongs to the user's school
+    if school_id and class_obj.school_id != school_id:
+        logger.warning(f"User {user} attempted to delete class {class_id} outside their school {school_id}")
+        return Response({'error': 'You do not have permission to delete this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Optionally check campus_id
+    if campus_id and class_obj.campus_id != campus_id:
+        logger.warning(f"User {user} attempted to delete class {class_id} outside their campus {campus_id}")
+        return Response({'error': 'You do not have permission to delete this class'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Allow superusers to bypass tenancy restrictions
+    if user.is_superuser:
+        pass  # No additional filtering needed
+
+    # Delete the class
     class_obj.delete()
+    logger.info(f"User {user} deleted class {class_id}")
     return Response({'message': 'Class deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
 
@@ -126,141 +235,232 @@ def subject_list(request):
         else:
             return Response({'error': 'Please provide a class_id parameter'}, status=status.HTTP_400_BAD_REQUEST)
 
-# Create a new subject
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def create_subject(request):
-    names = request.data.get('name', [])  # Get the list of names from request data
-    class_id = request.data.get('class_id', None)  # Get the class_id
-    
-    subjects_created = []
-    
-    # Loop through the list of names
-    for name in names:
-        # Create a Subject object for each name
-        subject_data = {'name': name, 'class_id': class_id}
-        serializer = SubjectSerializer(data=subject_data)
+# View to handle CRUD operations for the Subject model
+class SubjectCRUDView(
+    generics.GenericAPIView,
+    ListModelMixin,
+    CreateModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin
+):
+    """
+    CRUD operations for Subject model with tenancy restrictions.
+    """
+    queryset = Subject.objects.all()
+    serializer_class = SubjectSerializer
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+
+    def get_queryset(self):
+        """
+        Filter subjects to only those in the user's school/campus.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        if not user.is_superuser:  # Superusers see all
+            if user.school:
+                queryset = queryset.filter(school=user.school)
+            if user.campus:
+                queryset = queryset.filter(campus=user.campus)
+        return queryset
+
+    def get_object(self):
+        """
+        Optimize retrieval with select_related for school and campus.
+        """
+        queryset = self.get_queryset().select_related('school', 'campus')
+        obj = generics.get_object_or_404(queryset, pk=self.kwargs['pk'])
+        return obj
+
+    def check_tenancy(self, instance):
+        """
+        Helper method to check if the instance belongs to the user's school/campus.
+        Allows actions within the same school even if campus differs.
+        """
+        user = self.request.user
+        school_id = self.request.auth.get('school_id') if self.request.auth else user.school_id
+        campus_id = self.request.auth.get('campus_id') if self.request.auth else user.campus_id
+
+        if school_id and instance.school_id != school_id:
+            logger.warning(f"User {user} denied access to subject {instance.id} (school mismatch: {school_id} vs {instance.school_id})")
+            return False
         
-        if serializer.is_valid():
-            serializer.save()
-            subjects_created.append(serializer.data)
+        # Granular campus check: Allow if school matches, even if campus differs
+        if campus_id and instance.campus_id != campus_id:
+            if instance.school_id != school_id:
+                logger.warning(f"User {user} denied access to subject {instance.id} (campus mismatch: {campus_id} vs {instance.campus_id}, school mismatch)")
+                return False
+        
+        return True
+
+    def get(self, request, *args, **kwargs):
+        if 'pk' in kwargs:
+            return self.retrieve(request, *args, **kwargs)
+        return self.list(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        is_many = isinstance(data, list)
+        if not data:
+            return Response({"error": "No data provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=data, many=is_many)
+        serializer.is_valid(raise_exception=True)
+        
+        self.perform_create(serializer)
+        
+        if is_many:
+            created_names = [item['name'] for item in serializer.data]
+            logger.info(f"Subjects {created_names} created by {request.user}")
         else:
-            # If the serializer is not valid, return the error response
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Return the list of created subjects
-    return Response(subjects_created, status=status.HTTP_201_CREATED)
+            logger.info(f"Subject '{serializer.data['name']}' created by {request.user}")
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-# Retrieve details of a subject
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def subject_detail(request, subject_id):
-    subject = Subject.objects.get(id=subject_id)
-    serializer = SubjectSerializer(subject)
-    return Response(serializer.data)
+    def put(self, request, *args, **kwargs):
+        """
+        Update a subject (full update) with tenancy enforcement.
+        """
+        instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this subject'}, status=status.HTTP_403_FORBIDDEN)
 
+        return self.update(request, *args, **kwargs)
 
-# Update details of a subject
-@api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def update_subject(request, subject_id):
-    print(request.data)
-    subject = Subject.objects.get(id=subject_id)
-    serializer = SubjectSerializer(subject, data=request.data)
-    if serializer.is_valid():
+    def patch(self, request, *args, **kwargs):
+        """
+        Update a subject (partial update) with tenancy enforcement.
+        """
+        instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this subject'}, status=status.HTTP_403_FORBIDDEN)
+
+        return self.partial_update(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        """
+        Delete a subject with tenancy enforcement.
+        """
+        instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to delete this subject'}, status=status.HTTP_403_FORBIDDEN)
+
+        logger.info(f"Subject '{instance.name}' deleted by {request.user}")
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def perform_create(self, serializer):
         serializer.save()
-        return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# Delete a subject
-@api_view(['DELETE'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def delete_subject(request, subject_id):
-    subject = Subject.objects.get(id=subject_id)
-    subject.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
+    def perform_update(self, serializer):
+        serializer.save()
+        logger.info(f"Subject '{serializer.instance.name}' updated by {self.request.user}")
 
-
-# Teachers register subjects to be taught in a class.
-@api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def register_teacher_subjects(request):
-    if request.method == 'POST':
-        print(request.data)
-        existing_subjects = TeacherLevelClass.objects.filter(
-            teacher=request.user, class_id__id=request.data['class_id']
-        )
-        existing_subject_ids = set(
-            existing_subjects.values_list('subjects_taught', flat=True)
-        )
-        new_subject_ids = set(request.data['subjects_taught'])
-
-        duplicate_subject_ids = existing_subject_ids.intersection(new_subject_ids)
-        if duplicate_subject_ids:
-            duplicate_subjects = Subject.objects.filter(id__in=duplicate_subject_ids)
-            duplicate_subject_names = ', '.join([subject.name for subject in duplicate_subjects])
-            return Response(
-                {'error': f'The following subjects are already registered: {duplicate_subject_names}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        serializer = TeacherLevelClassSerializer(data=request.data, context={'request': request})
-
-        if serializer.is_valid():
-            if existing_subjects.exists():
-                # Update existing TeacherLevelClass object
-                teacher_level_class = existing_subjects.first()
-                serializer = TeacherLevelClassSerializer(
-                    teacher_level_class, data=request.data, partial=True, context={'request': request}
-                )
-                if serializer.is_valid():
-                    serializer.save()
-                    return Response(serializer.data, status=status.HTTP_200_OK) # Adjust status code to 200 (update)
-                else:
-                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                # Create a new TeacherLevelClass object
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-        else:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
 # Update Subjects registered to a Teacher
 @api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def update_teacher_subjects(request, class_id):
+    """
+    Update a TeacherLevelClass instance, ensuring it belongs to the user's school/campus.
+    Args:
+        class_id: The ID of the class tied to the TeacherLevelClass.
+    """
     try:
-        teacher_level_class = TeacherLevelClass.objects.get(teacher=request.user, class_id=class_id)
+        # Optimize with select_related for class, school, and campus
+        teacher_level_class = TeacherLevelClass.objects.select_related(
+            'class__school', 'class__campus'
+        ).get(teacher=request.user, class_id=class_id)
     except TeacherLevelClass.DoesNotExist:
         return Response({'error': 'TeacherLevelClass not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    # Extract the class object for tenancy check
+    class_obj = teacher_level_class.class_obj  # Assuming 'class_obj' is the ForeignKey field name
+
+    # Tenancy check
+    user = request.user
+    school_id = request.auth.get('school_id') if request.auth else user.school_id
+    campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+
+    # Reusable tenancy logic
+    if school_id and class_obj.school_id != school_id:
+        logger.warning(f"User {user} attempted to update TeacherLevelClass for class {class_id} outside their school {school_id}")
+        return Response({'error': 'You do not have permission to update this teacher-class assignment'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Granular campus check: Allow if school matches, even if campus differs
+    if campus_id and class_obj.campus_id != campus_id:
+        if class_obj.school_id != school_id:
+            logger.warning(f"User {user} attempted to update TeacherLevelClass for class {class_id} outside their campus {campus_id} and school {school_id}")
+            return Response({'error': 'You do not have permission to update this teacher-class assignment'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Allow superusers to bypass tenancy restrictions
+    if user.is_superuser:
+        pass
+
+    # Update the TeacherLevelClass
     serializer = TeacherLevelClassSerializer(
         teacher_level_class, data=request.data, partial=True, context={'request': request}
     )
     if serializer.is_valid():
         serializer.save()
+        logger.info(f"User {user} updated TeacherLevelClass for class {class_id}")
         return Response(serializer.data, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Retrieve Subjects registered to a Teacher
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_teacher_registered_subjects(request, class_id):
+    """
+    Retrieve subjects registered to a teacher for a specific class, ensuring tenancy.
+    Args:
+        class_id: The ID of the class to retrieve subjects for.
+    """
     try:
         teacher_id = int(request.user.id)
-        teacher_level_class = TeacherLevelClass.objects.get(teacher_id=teacher_id, class_id=class_id)
+        # Optimize with select_related for class, school, and campus
+        teacher_level_class = TeacherLevelClass.objects.select_related(
+            'class_obj__school', 'class_obj__campus'
+        ).get(teacher_id=teacher_id, class_id=class_id)
     except TeacherLevelClass.DoesNotExist:
         return Response({'subjects_taught_details': []}, status=status.HTTP_200_OK)
 
+    # Extract the class object for tenancy check
+    class_obj = teacher_level_class.class_obj  # Assuming 'class_obj' is the ForeignKey field name
+
+    # Tenancy check
+    user = request.user
+    school_id = request.auth.get('school_id') if request.auth else user.school_id
+    campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
+
+    # Enforce tenancy: Check if the class belongs to the user's school
+    if school_id and class_obj.school_id != school_id:
+        logger.warning(f"User {user} attempted to access subjects for class {class_id} outside their school {school_id}")
+        return Response({'subjects_taught_details': [], 'error': 'Class not in your school'}, status=status.HTTP_200_OK)
+
+    # Granular campus check: Allow if school matches, even if campus differs
+    if campus_id and class_obj.campus_id != campus_id:
+        if class_obj.school_id != school_id:
+            logger.warning(f"User {user} attempted to access subjects for class {class_id} outside their campus {campus_id} and school {school_id}")
+            return Response({'subjects_taught_details': [], 'error': 'Class not in your campus or school'}, status=status.HTTP_200_OK)
+
+    # Allow superusers to bypass tenancy restrictions
+    if user.is_superuser:
+        pass  # No filtering needed
+
+    # Serialize and return the data
     serializer = TeacherLevelClassSerializer(teacher_level_class)
+    logger.info(f"User {user} retrieved subjects for class {class_id}")
     return Response([serializer.data], status=status.HTTP_200_OK)
 
 
 ''' PROMOTE STUDENTS OR A STUDENT TO A DIFFERENT CLASS'''
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus, IsAssignedTeacher])
 def promote_students(request):
     student_ids = request.data.get('student_ids', [])
     new_class_id = request.data.get('new_class_id')
@@ -268,16 +468,28 @@ def promote_students(request):
 
     if not student_ids or not new_class_id or not academic_year:
         return Response({"error": "Missing required parameters."}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     new_class = get_object_or_404(Class, id=new_class_id)
 
     promoted_students = []
 
     try:
         for student_id in student_ids:
-            student = get_object_or_404(Student, id=student_id)
+            student = get_object_or_404(User, id=student_id)
+
+            # Ensure the user has a "Student" role
+            if not student.has_role('Student'):
+                logger.warning(f"User {student.id} is not a student, skipping promotion")
+                continue
+
+            # Ensure the student belongs to the same school/campus
+            if student.school_id != request.user.school_id:
+                logger.warning(f"Student {student.id} does not belong to the same school, skipping")
+                continue
+
+            # Check existing enrollment
             current_class_enrollment = ClassEnrollment.objects.filter(student=student).first()
-            
+
             # Move current enrollment to historical
             if current_class_enrollment:
                 HistoricalClassEnrollment.objects.create(
@@ -286,7 +498,7 @@ def promote_students(request):
                     academic_year=current_class_enrollment.academic_year
                 )
                 current_class_enrollment.delete()
-            
+
             # Enroll student in new class
             new_enrollment = ClassEnrollment.objects.create(
                 student=student,
@@ -294,9 +506,10 @@ def promote_students(request):
                 academic_year=academic_year,
                 status='promoted'
             )
+
             promoted_students.append({
                 'student_id': student.id,
-                'student_name': student.name,
+                'student_name': student.username or student.email,
                 'new_class_id': new_class.id,
                 'new_class_name': new_class.name,
                 'enrollment_date': new_enrollment.academic_year
@@ -307,8 +520,8 @@ def promote_students(request):
             'promoted_students': promoted_students
         }, status=status.HTTP_200_OK)
 
-
     except Exception as e:
+        logger.error(f"Error promoting students: {str(e)}")
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -352,15 +565,32 @@ def repeat_students(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
 def get_promoted_existing_repeated_students(request, class_id):
     try:
         new_class = get_object_or_404(Class, id=class_id)
 
-        promoted_enrollments = ClassEnrollment.objects.filter(class_id=new_class, status='promoted').select_related('student')
-        existing_enrollments = ClassEnrollment.objects.filter(class_id=new_class, status='existing').select_related('student')
-        repeated_enrollments = ClassEnrollment.objects.filter(class_id=new_class, status='repeated').select_related('student')
-        
+        # Fetch school and campus of the authenticated user
+        user = request.user
+        user_school_id = user.school_id
+        user_campus_id = user.campus_id
+
+        # Ensure the class enrollment belongs to the same school/campus as the user
+        promoted_enrollments = ClassEnrollment.objects.filter(
+            class_id=new_class, status='promoted',
+            school_id=user_school_id, campus_id=user_campus_id
+        ).select_related('student')
+
+        existing_enrollments = ClassEnrollment.objects.filter(
+            class_id=new_class, status='existing',
+            school_id=user_school_id, campus_id=user_campus_id
+        ).select_related('student')
+
+        repeated_enrollments = ClassEnrollment.objects.filter(
+            class_id=new_class, status='repeated',
+            school_id=user_school_id, campus_id=user_campus_id
+        ).select_related('student')
+
         promoted_students_data = []
         for enrollment in promoted_enrollments:
             historical_enrollment = HistoricalClassEnrollment.objects.filter(student=enrollment.student).order_by('-id').first()
@@ -369,8 +599,10 @@ def get_promoted_existing_repeated_students(request, class_id):
             student_data['previous_class_name'] = previous_class_name
             promoted_students_data.append(student_data)
 
-        existing_students_data = StudentSerializer([enrollment.student for enrollment in existing_enrollments], many=True).data
-        
+        existing_students_data = StudentSerializer(
+            [enrollment.student for enrollment in existing_enrollments], many=True
+        ).data
+
         repeated_students_data = []
         for enrollment in repeated_enrollments:
             historical_enrollment = HistoricalClassEnrollment.objects.filter(student=enrollment.student).order_by('-id').first()
@@ -390,21 +622,45 @@ def get_promoted_existing_repeated_students(request, class_id):
     
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacher, IsAssignedTeacher])
 def merge_promoted_repeated_students(request):
     student_ids = request.data.get('student_ids', [])
+    class_id = request.data.get('class_id')  # Ensure class_id is included in the request
 
-    if not student_ids:
+    if not student_ids or not class_id:
         return Response({"error": "Missing required parameters."}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        for student_id in student_ids:
-            student = get_object_or_404(Student, id=student_id)
-            class_enrollments = ClassEnrollment.objects.filter(student=student, status__in=['promoted', 'repeated'])
+        # Verify that the class exists
+        target_class = get_object_or_404(Class, id=class_id)
 
-            for enrollment in class_enrollments:
-                enrollment.status = 'existing'
-                enrollment.save()
+        # Get user school and campus
+        user = request.user
+        user_school_id = user.school_id
+        user_campus_id = user.campus_id
+
+        # Check tenancy: Ensure the class belongs to the same school/campus
+        if target_class.school_id != user_school_id or target_class.campus_id != user_campus_id:
+            return Response({"error": "Permission denied. You are not assigned to this class."}, status=status.HTTP_403_FORBIDDEN)
+
+        for student_id in student_ids:
+            student = get_object_or_404(User, id=student_id, roles__name="Student")
+
+            # Find enrollments where the student is promoted or repeated in the given class
+            class_enrollments = ClassEnrollment.objects.filter(
+                student=student,
+                class_id=target_class,
+                status__in=['promoted', 'repeated'],
+                school_id=user_school_id,
+                campus_id=user_campus_id
+            )
+
+            if not class_enrollments.exists():
+                return Response({"error": f"Student {student_id} is not enrolled as 'promoted' or 'repeated' in this class."},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # Update status to 'existing'
+            class_enrollments.update(status='existing')
 
         return Response({"message": "Students merged successfully."}, status=status.HTTP_200_OK)
 
@@ -413,39 +669,68 @@ def merge_promoted_repeated_students(request):
     
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsParent | IsTeacher | IsHeadmaster])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
 def get_students_by_class_id(request):
     class_id = request.query_params.get('class_id')
     if not class_id:
         return Response({'error': 'Class ID parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        # Get the authenticated user's school and campus
+        user = request.user
+        user_school_id = user.school_id
+        user_campus_id = user.campus_id
+
+        # Ensure that the class exists and belongs to the same school and campus
+        target_class = get_object_or_404(Class, id=class_id, school_id=user_school_id, campus_id=user_campus_id)
+
+        # Get 'Student' role
         student_role = Role.objects.get(name='Student')
+
+        # Fetch enrollments by class, status, and tenancy
         enrollments = ClassEnrollment.objects.filter(
-            class_id=class_id,
+            class_id=target_class,
             status='existing',
-            student__roles=student_role
+            student__roles=student_role,
+            school_id=user_school_id,
+            campus_id=user_campus_id
         ).select_related('student', 'class_id', 'academic_year')
+
+        if not enrollments.exists():
+            return Response({'error': f"No students found for class {target_class.name} with status 'existing'"},
+                            status=status.HTTP_404_NOT_FOUND)
 
         logger.info(f"Enrollments found: {enrollments.count()}")
         serializer = ClassEnrollmentSerializer(enrollments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
     except Role.DoesNotExist:
         return Response({'error': "Role 'Student' does not exist"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    except ClassEnrollment.DoesNotExist:
-        return Response({'error': f"No students found for class_id {class_id} with status 'existing'"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
 # Update a specific student
 @api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def update_student(request, student_id):
     try:
         student = User.objects.get(id=student_id)
     except User.DoesNotExist:
         return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Get the authenticated user's school and campus
+    user = request.user
+    user_school_id = user.school_id
+    user_campus_id = user.campus_id
+
+    # Ensure the student belongs to the same school and campus
+    if student.school_id != user_school_id or student.campus_id != user_campus_id:
+        return Response(
+            {'error': 'You are not authorized to update this student.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
 
     # Update student data
     student_serializer = UserSerializer(student, data=request.data, partial=True)
@@ -498,43 +783,44 @@ def update_student(request, student_id):
 
 # Get a specific student
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
 def get_student(request, student_id):
-    print(student_id)
     try:
-        student = Student.objects.get(id=student_id)
-    except Student.DoesNotExist:
-        return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+        # Ensure the student exists and has the 'Student' role
+        student = User.objects.filter(
+            id=student_id,
+            roles__name='Student'
+        ).select_related('school', 'campus').first()
 
-    serializer = StudentSerializer(student)
-    return Response(serializer.data)
+        if not student:
+            return Response({'error': 'Student not found or does not have the Student role.'}, status=status.HTTP_404_NOT_FOUND)
 
-# Delete a specific student
-@api_view(['DELETE'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def delete_student(request, student_id):
-    try:
-        student = Student.objects.get(id=student_id)
-    except Student.DoesNotExist:
-        return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+        # Check tenancy: Ensure the requester belongs to the same school and campus as the student
+        if request.user.school_id != student.school_id or request.user.campus_id != student.campus_id:
+            return Response({'error': 'You are not authorized to access this student.'}, status=status.HTTP_403_FORBIDDEN)
 
-    student.delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
+        # Serialize and return student data
+        serializer = StudentSerializer(student)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 '''STUDENT ASSESSTMENT ENDPOINTS'''
 
 # Create student assesstment 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherInSchoolOrCampus])
 def create_assessments(request):
     if request.method == 'POST':
-        teacher_id = int(request.user.id)
-        teacher = User.objects.get(id=teacher_id)
+        teacher = request.user  # Get the authenticated teacher
+
+        # Ensure teacher is registered to a school and campus
+        if not teacher.school or not teacher.campus:
+            return Response({'error': 'Teacher must be registered to a school and campus.'}, status=status.HTTP_403_FORBIDDEN)
 
         assessments_data = request.data.get('assessments', [])  # Get the list of assessment data from the request
-
         created_assessments = []
         errors = []
 
@@ -543,68 +829,70 @@ def create_assessments(request):
             class_id = data.pop('class_id')
             subject_id = data.pop('subject')
             students_data = data.pop('student_marks', [])
-            
-            subject = Subject.objects.get(pk=subject_id)
-            class_obj = Class.objects.get(pk=class_id)
-            
-            # Check if the teacher is assigned to teach the subject in the specified class
-            teacher_level_class = TeacherLevelClass.objects.filter(
-                teacher=teacher, class_id=class_obj, subjects_taught=subject
-            ).first()
-            if not teacher_level_class:
-                errors.append({'error': f'Teacher is not assigned to teach subject with ID {subject_id} in class with ID {class_id}'})
-                continue
 
-            for student_data in students_data:
-                student_id = student_data.get('id')
-                obtained_marks = student_data.get('obtained_marks')
+            try:
+                # Fetch class and subject with tenancy check
+                class_obj = Class.objects.get(id=class_id, school=teacher.school, campus=teacher.campus)
+                subject = Subject.objects.get(id=subject_id, school=teacher.school, campus=teacher.campus)
 
-                try:
-                    # Validate and convert total_marks and obtained_marks to Decimal
-                    total_marks = data.get('total_marks')
-                    if total_marks is not None:
+                # Check if the teacher is assigned to teach the subject in the specified class
+                teacher_level_class = TeacherLevelClass.objects.filter(
+                    teacher=teacher, class_id=class_obj, subjects_taught=subject
+                ).first()
+                if not teacher_level_class:
+                    errors.append({'error': f'Teacher is not assigned to teach subject ID {subject_id} in class ID {class_id} at this school/campus.'})
+                    continue
+
+                for student_data in students_data:
+                    student_id = student_data.get('id')
+                    obtained_marks = student_data.get('obtained_marks')
+
+                    try:
+                        # Fetch student with tenancy check
+                        student = User.objects.get(id=student_id, roles__name='Student', school=teacher.school, campus=teacher.campus)
+
+                        # Validate and convert total_marks and obtained_marks to Decimal
+                        total_marks = data.get('total_marks', '0.00')
+                        obtained_marks = obtained_marks if obtained_marks not in [None, ""] else "0.00"
+
                         try:
                             total_marks = Decimal(total_marks)
-                        except InvalidOperation:
-                            errors.append({'detail': f"Invalid total_marks value: {total_marks}"})
-                            continue
-                    else:
-                        total_marks = Decimal('0.00')
-
-                    # Handle empty string for obtained_marks
-                    if obtained_marks is None or obtained_marks == "":
-                        obtained_marks = Decimal('0.00')
-                    else:
-                        try:
                             obtained_marks = Decimal(obtained_marks)
                         except InvalidOperation:
-                            errors.append({'detail': f"Invalid obtained_marks value: {obtained_marks}"})
+                            errors.append({'error': f"Invalid marks format for student ID {student_id}."})
                             continue
 
-                    student = Student.objects.get(pk=student_id)
-                    assessment_data = {
-                        'student_id': student,
-                        'class_id': class_obj,
-                        'teacher': teacher,
-                        'subject': subject,
-                        'total_marks': total_marks,
-                        'topic': data.get('topic'),
-                        'assessment_type': data.get('assessment_type'),
-                        'semester': data.get('semester'),
-                        'date': data.get('date'),
-                        'obtained_marks': obtained_marks
-                    }
-                    assessment_instance = Assessment.objects.create(**assessment_data)
-                    created_assessments.append(assessment_instance)
-                except Student.DoesNotExist:
-                    errors.append({'detail': f"Student with ID {student_id} does not exist."})
-        
+                        # Create the assessment entry
+                        assessment_instance = Assessment.objects.create(
+                            student=student,
+                            class_id=class_obj,
+                            teacher=teacher,
+                            subject=subject,
+                            school=teacher.school,
+                            campus=teacher.campus,
+                            total_marks=total_marks,
+                            topic=data.get('topic'),
+                            assessment_name=data.get('assessment_type'),
+                            term=data.get('term'),
+                            date=data.get('date'),
+                            obtained_marks=obtained_marks
+                        )
+                        created_assessments.append(assessment_instance)
+                    except User.DoesNotExist:
+                        errors.append({'error': f"Student ID {student_id} does not exist in this school and campus."})
+
+            except Class.DoesNotExist:
+                errors.append({'error': f"Class ID {class_id} does not exist in this school and campus."})
+            except Subject.DoesNotExist:
+                errors.append({'error': f"Subject ID {subject_id} does not exist in this school and campus."})
+
         if errors:
             return Response(errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             # Serialize the created assessment instances
             serializer = AssessmentSerializer(created_assessments, many=True)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response({'error': 'Invalid request method.'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 @api_view(['POST'])
@@ -1632,6 +1920,9 @@ class LevelCRUDView(
     permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
 
     def get_queryset(self):
+        """
+        Filter levels to only those in the user's school/campus.
+        """
         queryset = super().get_queryset()
         user = self.request.user
         if not user.is_superuser:  # Superusers see all
@@ -1640,6 +1931,35 @@ class LevelCRUDView(
             if user.campus:
                 queryset = queryset.filter(campus=user.campus)
         return queryset
+    
+    def get_object(self):
+        """
+        Optimize retrieval with select_related for school and campus.
+        """
+        queryset = self.get_queryset().select_related('school', 'campus')
+        obj = generics.get_object_or_404(queryset, pk=self.kwargs['pk'])
+        return obj
+    
+    def check_tenancy(self, instance):
+        """
+        Helper method to check if the instance belongs to the user's school/campus.
+        Allows actions within the same school even if campus differs.
+        """
+        user = self.request.user
+        school_id = self.request.auth.get('school_id') if self.request.auth else user.school_id
+        campus_id = self.request.auth.get('campus_id') if self.request.auth else user.campus_id
+
+        if school_id and instance.school_id != school_id:
+            logger.warning(f"User {user} denied access to subject {instance.id} (school mismatch: {school_id} vs {instance.school_id})")
+            return False
+        
+        # Granular campus check: Allow if school matches, even if campus differs
+        if campus_id and instance.campus_id != campus_id:
+            if instance.school_id != school_id:
+                logger.warning(f"User {user} denied access to subject {instance.id} (campus mismatch: {campus_id} vs {instance.campus_id}, school mismatch)")
+                return False
+        
+        return True
 
     def get(self, request, *args, **kwargs):
         if 'pk' in kwargs:
@@ -1666,13 +1986,36 @@ class LevelCRUDView(
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, *args, **kwargs):
+        """
+        Update a level (full update) with tenancy enforcement.
+        """
+        instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this level'}, status=status.HTTP_403_FORBIDDEN)
+
         return self.update(request, *args, **kwargs)
 
     def patch(self, request, *args, **kwargs):
+        """
+        Update a level (partial update) with tenancy enforcement.
+        """
+        instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this level'}, status=status.HTTP_403_FORBIDDEN)
+
         return self.partial_update(request, *args, **kwargs)
 
     def delete(self, request, *args, **kwargs):
+        """
+        Delete a level with tenancy enforcement.
+        """
         instance = self.get_object()
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to delete this level'}, status=status.HTTP_403_FORBIDDEN)
+
         logger.info(f"Level '{instance.name}' deleted by {request.user}")
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
