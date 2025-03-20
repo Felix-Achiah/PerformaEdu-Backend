@@ -40,4 +40,6 @@ urlpatterns = [
 
     # Validate Student from chat system endpoint
     path('validate-student/<int:student_id>/', views.ValidateStudentAPIView.as_view(), name='validate-student'),
+
+    path('roles/', views.RoleCreateView.as_view(), name='create-role'),
 ]

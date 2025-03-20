@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 from decimal import Decimal
 from django.utils import timezone
@@ -21,6 +22,7 @@ LEVEL_TYPE_CHOICES = [
 ]
 
 class Level(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_levels', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_levels', null=True, blank=True)
     name = models.CharField(max_length=100)
@@ -29,6 +31,7 @@ class Level(models.Model):
         return self.name
 
 class Terms(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='schoo_terms', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='school_terms', null=True, blank=True)
     name = models.CharField(max_length=100)
@@ -37,6 +40,7 @@ class Terms(models.Model):
         return self.name
 
 class Class(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_classes', null=True, blank=True) # All classes in the school
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_classes', null=True, blank=True)
     name = models.CharField(max_length=100)
@@ -49,6 +53,7 @@ class Class(models.Model):
     
 
 class Subject(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_subjects', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_subjects', null=True, blank=True)
     name = models.CharField(max_length=100)
@@ -59,7 +64,30 @@ class Subject(models.Model):
         return self.name
 
 
+class ClassSubject(models.Model):
+    """
+    Model to link Subjects to Classes.
+    Different classes can have the same subjects.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.ForeignKey(School, on_delete=models.CASCADE, null=True, blank=True, related_name="school_class_subjects")
+    campus = models.ForeignKey(Campus, on_delete=models.CASCADE, null=True, blank=True, related_name="campus_class_subjects")
+    class_id = models.ForeignKey('Class', on_delete=models.CASCADE, related_name="subjects_assigned")
+    subject = models.ForeignKey('Subject', on_delete=models.CASCADE, related_name="classes_assigned")
+    assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('class_id', 'subject')  # Prevent duplicate subject assignments to the same class
+
+    def __str__(self):
+        return f"{self.class_id.name} - {self.subject.name}"
+
+
+
 class TeacherLevelClass(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_teacher_level_class', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_teacher_level_class', null=True, blank=True)
     teacher = models.ForeignKey(
@@ -93,6 +121,7 @@ class TeacherLevelClass(models.Model):
 
 
 class TeacherAssignmentHistory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_teacher_assignment_history', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_teacher_assignment_history', null=True, blank=True)
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -129,6 +158,7 @@ class Student(models.Model):
         return None
     
 class StudentParentRelation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_student_parent_relation', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_student_parent_relation', null=True, blank=True)
     student = models.ForeignKey(
@@ -157,6 +187,7 @@ class StudentParentRelation(models.Model):
 
 
 class AssessmentName(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_assessment_names', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_assessment_names', null=True, blank=True)
     name = models.CharField(max_length=255)
@@ -192,6 +223,7 @@ class AssessmentName(models.Model):
 
 
 class Assessment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_assessments', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_assessments', null=True, blank=True)
     student = models.ForeignKey(
@@ -229,6 +261,7 @@ class Assessment(models.Model):
 
 
 class ProcessedMarks(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_processed_marks', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_processed_marks', null=True, blank=True)
     student = models.ForeignKey(
@@ -250,6 +283,7 @@ class ProcessedMarks(models.Model):
 
 
 class SubjectPerformance(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_subject_performance', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_subject_performance', null=True, blank=True)
     student = models.ForeignKey(
@@ -274,6 +308,7 @@ class ClassEnrollment(models.Model):
         ('repeated', 'Repeated'),
     ]
 
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_class_enrollment', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_class_enrollment', null=True, blank=True)
     student = models.ForeignKey(
@@ -294,6 +329,7 @@ class ClassEnrollment(models.Model):
 
 
 class HistoricalClassEnrollment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_historical_class_enrollment', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_historical_class_enrollment', null=True, blank=True)
     student = models.ForeignKey(
@@ -313,6 +349,7 @@ class HistoricalClassEnrollment(models.Model):
 
 
 class HistoricalAssessmentResult(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_historical_assessment_result', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_historical_assessment_result', null=True, blank=True)
     historical_class_enrollment = models.ForeignKey(HistoricalClassEnrollment, on_delete=models.CASCADE)
@@ -323,6 +360,7 @@ class HistoricalAssessmentResult(models.Model):
 
 
 class TimeTable(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_timetables', null=True, blank=True)
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_timetables', null=True, blank=True)
     class_id = models.ForeignKey(Class, on_delete=models.CASCADE, related_name="timetables")

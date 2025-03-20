@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
-from .models import Class, TeacherLevelClass, TeacherAssignmentHistory , Subject, Assessment, ClassEnrollment, Student, HistoricalClassEnrollment, SubjectPerformance, ProcessedMarks, Level, Terms, StudentParentRelation, TimeTable, AssessmentName
+from .models import Class, TeacherLevelClass, TeacherAssignmentHistory , Subject, Assessment, ClassEnrollment, Student, HistoricalClassEnrollment, SubjectPerformance, ProcessedMarks, Level, Terms, StudentParentRelation, TimeTable, AssessmentName, ClassSubject
 from user_auth.serializers import UserSerializer
 from school.serializers import SchoolSerializer, CampusSerializer
 
@@ -149,6 +149,13 @@ class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
         fields = ['id', 'name', 'school', 'campus', 'created_at', 'updated_at']
+
+
+class ClassSubjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassSubject
+        fields = ['id', 'class_id', 'subject', 'school', 'campus', 'assigned_by', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'assigned_by', 'created_at', 'updated_at']
 
 
 class TeacherLevelClassSerializer(serializers.ModelSerializer):

@@ -31,7 +31,7 @@ from django.db import transaction
 
 from .models import User, Role
 from school.models import School, Campus
-from .serializers import UserSerializer, PasswordResetSerializer
+from .serializers import UserSerializer, PasswordResetSerializer, RoleSerializer
 from student_performance.serializers import TeacherLevelClassSerializer, StudentSerializer, ClassEnrollment, HistoricalClassEnrollment, Class, StudentParentRelationSerializer
 from student_performance.models import TeacherLevelClass, Student, StudentParentRelation, ClassEnrollment, HistoricalClassEnrollment, Class
 from administrator.models import AcademicYear
@@ -48,7 +48,7 @@ def generate_default_password(length=12):
     return ''.join(random.choice(characters) for _ in range(length))
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsAdmin | IsTeacherOrAdmin])
+@permission_classes([permissions.AllowAny])
 def sign_up(request):
     try:
         data = request.data
@@ -123,6 +123,7 @@ def sign_up(request):
                     campus=campus   # Assign Campus instance
                 )
                 user.roles.set(roles)
+                user.save()
                 created_users.append(user)
 
             # Log success
@@ -1006,3 +1007,20 @@ class ValidateStudentAPIView(APIView):
             }, status=status.HTTP_200_OK)
         except User.DoesNotExist:
             return Response({'error': 'Student not found', 'exists': False}, status=status.HTTP_404_NOT_FOUND)
+        
+class RoleCreateView(APIView):
+    permission_classes=[permissions.AllowAny]
+    def post(self, request):
+        """Handle both single and bulk role creation"""
+        
+        # Check if the request data is a list (bulk creation) or a single object
+        if isinstance(request.data, list):
+            serializer = RoleSerializer(data=request.data, many=True)
+        else:
+            serializer = RoleSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

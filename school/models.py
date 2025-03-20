@@ -3,6 +3,7 @@ from django.conf import settings
 import uuid
 
 class School(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
     subdomain = models.CharField(max_length=100, unique=True, help_text="e.g., schoolname")
     logo = models.ImageField(upload_to='school_logos/', null=True, blank=True)
@@ -23,6 +24,7 @@ class School(models.Model):
         return self.name
 
 class Campus(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='campuses')
     name = models.CharField(max_length=255)
     city = models.CharField(max_length=100)  # Campus location (city/town)

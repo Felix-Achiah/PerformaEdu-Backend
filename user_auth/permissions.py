@@ -200,3 +200,31 @@ class IsTeacherInSchoolOrCampus(IsTeacher, IsRegisteredInSchoolOrCampus):
             IsTeacher.has_permission(self, request, view) and
             IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
         )
+    
+
+class IsParentInSchoolOrCampus(IsParent, IsRegisteredInSchoolOrCampus):
+    def has_permission(self, request, view):
+        return (
+            IsParent.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_permission(self, request, view)
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return (
+            IsParent.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
+        )
+    
+
+class IsStudentInSchoolOrCampus(IsStudent, IsRegisteredInSchoolOrCampus):
+    def has_permission(self, request, view):
+        return (
+            IsStudent.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_permission(self, request, view)
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return (
+            IsStudent.has_permission(self, request, view) and
+            IsRegisteredInSchoolOrCampus.has_object_permission(self, request, view, obj)
+        )

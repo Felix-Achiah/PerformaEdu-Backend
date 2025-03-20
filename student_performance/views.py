@@ -22,15 +22,16 @@ from rest_framework.mixins import (
 from .assign_grade import assign_grade
 from .consolidate_subject_data import consolidate_subject_data
 from .get_position_suffix import get_position_suffix
-from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsTeacherOrAdmin, IsAdmin, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus, IsHeadmasterInSchoolOrCampus, IsTeacherInSchoolOrCampus
-from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName, Level, Terms
+from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus, IsHeadmasterInSchoolOrCampus, IsTeacherInSchoolOrCampus, IsParentInSchoolOrCampus
+from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName, Level, Terms, ClassSubject
 from user_auth.models import User, Role
 from user_auth.serializers import UserSerializer
-from .serializers import ClassSerializer, SubjectSerializer, TeacherLevelClassSerializer, StudentSerializer, AssessmentSerializer, PromoteStudentsSerializer, ClassEnrollmentSerializer, SubjectPerformanceSerializer, TopicPerformanceSerializer, ProcessedMarksSerializer, StudentParentRelationSerializer, TimeTableSerializer, AssessmentNameSerializer, LevelSerializer, TermsSerializer
+from .serializers import ClassSerializer, SubjectSerializer, TeacherLevelClassSerializer, StudentSerializer, AssessmentSerializer, PromoteStudentsSerializer, ClassEnrollmentSerializer, SubjectPerformanceSerializer, TopicPerformanceSerializer, ProcessedMarksSerializer, StudentParentRelationSerializer, TimeTableSerializer, AssessmentNameSerializer, LevelSerializer, TermsSerializer, ClassSubjectSerializer
 from administrator.models import AcademicYear
 from school.models import School, Campus
 
 logger = logging.getLogger(__name__)
+
 
 '''CRUD endpoints for Class'''
 # Create endpoint
@@ -181,7 +182,7 @@ def update_class(request, class_id):
 
 # Delete endpoint
 @api_view(['DELETE'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def delete_class(request, class_id):
     """
     Delete a class, ensuring it belongs to the user's school.
@@ -249,7 +250,24 @@ class SubjectCRUDView(
     """
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
-    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+
+    # Default permissions
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        """
+        Assign different permissions based on the request method.
+        """
+        if self.request.method in ["GET"]:  # List and Retrieve
+            return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
+        
+        elif self.request.method in ["POST", "PUT", "PATCH"]:  # Create and Update
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        elif self.request.method == "DELETE":  # Delete
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus(), permissions.IsAdminUser()]
+        
+        return super().get_permissions()
 
     def get_queryset(self):
         """
@@ -359,6 +377,95 @@ class SubjectCRUDView(
         serializer.save()
         logger.info(f"Subject '{serializer.instance.name}' updated by {self.request.user}")
 
+
+class ManageClassSubjectsView(generics.GenericAPIView):
+    """
+    API View to assign, update, delete, and list subjects assigned to a class.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsTeacherInSchoolOrCampus]  
+    serializer_class = ClassSubjectSerializer
+
+    def get_queryset(self):
+        """Filter subjects based on the class ID and user's school/campus."""
+        user = self.request.user
+        queryset = ClassSubject.objects.all()
+        
+        if not user.is_superuser:
+            if user.school:
+                queryset = queryset.filter(school=user.school)
+            if user.campus:
+                queryset = queryset.filter(campus=user.campus)
+        
+        return queryset
+
+    def get(self, request, class_id):
+        """
+        List all subjects assigned to a specific class.
+        """
+        subjects = self.get_queryset().filter(class_id=class_id)
+        serializer = self.get_serializer(subjects, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        """
+        Assign one or multiple subjects to a class.
+        """
+        class_id = request.data.get("class_id")
+        subject_ids = request.data.get("subject_ids", [])  # List of subjects
+        
+        if not class_id or not subject_ids:
+            return Response({"error": "class_id and subject_ids are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            class_instance = Class.objects.get(id=class_id)
+        except Class.DoesNotExist:
+            return Response({"error": "Class not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        assigned_subjects = []
+        for subject_id in subject_ids:
+            try:
+                subject_instance = Subject.objects.get(id=subject_id)
+                class_subject, created = ClassSubject.objects.get_or_create(
+                    class_id=class_instance,
+                    subject=subject_instance,
+                    school=class_instance.school,
+                    campus=class_instance.campus,
+                    assigned_by=request.user
+                )
+                assigned_subjects.append(class_subject)
+            except Subject.DoesNotExist:
+                return Response({"error": f"Subject with ID {subject_id} not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(assigned_subjects, many=True)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def put(self, request, pk):
+        """
+        Update a specific class-subject assignment.
+        """
+        try:
+            class_subject = ClassSubject.objects.get(id=pk)
+        except ClassSubject.DoesNotExist:
+            return Response({"error": "Assignment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(class_subject, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save(assigned_by=request.user)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        """
+        Delete an assigned subject from a class.
+        """
+        try:
+            class_subject = ClassSubject.objects.get(id=pk)
+        except ClassSubject.DoesNotExist:
+            return Response({"error": "Assignment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        class_subject.delete()
+        return Response({"message": "Subject removed from class"}, status=status.HTTP_204_NO_CONTENT)
+    
         
 # Update Subjects registered to a Teacher
 @api_view(['PUT'])
@@ -896,80 +1003,93 @@ def create_assessments(request):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher | IsParent | IsHeadmaster])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
 def fetch_historical_assessment_data(request):
     try:
         # Extract parameters from request data
         student_id = request.data.get('student_id')
         class_id = request.data.get('class_id')
         academic_year = request.data.get('academic_year')
-        assessment_type = request.data.get('assessment_type')
+        assessment_name = request.data.get('assessment_name')  # Updated field
         subject_id = request.data.get('subject_id')
         semester = request.data.get('semester')
+        school_id = request.data.get('school_id')
+        campus_id = request.data.get('campus_id')
 
-        # Fetch student and class instances for better messages
-        student = Student.objects.get(id=student_id)
+        # Ensure required fields are provided
+        if not all([student_id, class_id, academic_year, school_id, campus_id]):
+            return Response({'error': 'Missing required fields'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch student (user with role 'Student') and class instance
+        student = User.objects.get(id=student_id, roles__name="Student")
         class_instance = Class.objects.get(id=class_id)
 
-        # Check if student was enrolled (current or historical) for the given academic year
+        # Verify student enrollment in school and campus
         current_enrollment = ClassEnrollment.objects.filter(
             student=student,
             class_id=class_instance,
             academic_year=academic_year,
+            school_id=school_id,
+            campus_id=campus_id,
         ).exists()
 
         historical_enrollment = HistoricalClassEnrollment.objects.filter(
             student=student,
             class_enrolled=class_instance,
             academic_year=academic_year,
+            school_id=school_id,
+            campus_id=campus_id,
         ).exists()
 
         if not current_enrollment and not historical_enrollment:
-            message = f"Sorry, {student.name} didn't enroll in the {class_instance.name} class in the {academic_year} academic year."
+            message = f"Sorry, {student.username} wasn't enrolled in {class_instance.name} at school {school_id} (campus {campus_id}) in {academic_year}."
             return Response({'error': message}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Filter assessments based on parameters
+
+        # Filter assessments by school, campus, and assessment_name
         assessments = Assessment.objects.filter(
-            student_id=student_id,
-            class_id=class_id,
-            subject=subject_id,
-            assessment_type=assessment_type,
+            student=student,
+            class_id=class_instance,
+            subject_id=subject_id,
+            assessment_name=assessment_name,  # Updated filtering
+            school_id=school_id,
+            campus_id=campus_id,
         )
 
-        # Check if semester filter is applicable
-        if assessment_type in ['Exercise', 'Assignment'] and semester:
+        # Apply semester filtering if applicable
+        if assessment_name in ['Exercise', 'Assignment'] and semester:
             assessments = assessments.filter(semester=semester)
-        elif assessment_type not in ['Exercise', 'Assignment', 'Final Exams', 'Mid Term Exams']:
+        elif assessment_name not in ['Exercise', 'Assignment', 'Final Exams', 'Mid Term Exams']:
             assessments = assessments.exclude(semester__in=['1st Semester', '2nd Semester'])
 
-        # Serialize queryset into JSON
+        # Serialize and return the assessments
         serializer = AssessmentSerializer(assessments, many=True)
-        
         return Response({'assessments': serializer.data}, status=status.HTTP_200_OK)
-    
-    except Student.DoesNotExist:
-        return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    except User.DoesNotExist:
+        return Response({'error': 'Student not found or does not have the Student role.'}, status=status.HTTP_404_NOT_FOUND)
     except Class.DoesNotExist:
         return Response({'error': 'Class not found.'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def get_student_assessments(request, student_id, semester, subject_id, assessment_type):
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
+def get_student_assessments(request, student_id, term, subject_id, assessment_name, school_id, campus_id):
     try:
         # Retrieve assessments based on provided filters
         assessments = Assessment.objects.filter(
-            student_id=student_id,
-            semester=semester,
-            subject_id=subject_id,
-            assessment_type=assessment_type
+            school=school_id,
+            campus=campus_id,
+            student=student_id,
+            term=term,
+            subject=subject_id,
+            assessment_name=assessment_name
         )
         
         # Serialize the assessments
         serializer = AssessmentSerializer(assessments, many=True)
-        print(serializer.data)
         return Response(serializer.data)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -977,14 +1097,16 @@ def get_student_assessments(request, student_id, semester, subject_id, assessmen
 
 # Get Student Mid Term or Final Exam assessment
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def get_student_exams_assessments(request, student_id, subject_id, assessment_type):
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
+def get_student_exams_assessments(request, student_id, subject_id, assessment_name, school_id, campus_id):
     try:
         # Retrieve assessments based on provided filters
         assessments = Assessment.objects.filter(
-            student_id=student_id,
-            subject_id=subject_id,
-            assessment_type=assessment_type
+            school=school_id,
+            campus=campus_id,
+            student=student_id,
+            subject=subject_id,
+            assessment_name=assessment_name
         )
         
         # Serialize the assessments
@@ -995,12 +1117,14 @@ def get_student_exams_assessments(request, student_id, subject_id, assessment_ty
 
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def get_student_assessment(request, student_id, assessment_id):
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
+def get_student_assessment(request, student_id, assessment_id, school_id, campus_id):
     try:
         # Retrieve the specific assessment based on student_id and assessment_id
         assessment = Assessment.objects.get(
-            student_id=student_id,
+            school=school_id,
+            campus=campus_id,
+            student=student_id,
             id=assessment_id
         )
         
@@ -1015,140 +1139,150 @@ def get_student_assessment(request, student_id, assessment_id):
 
 # Update students' assessment(s)
 @api_view(['PUT'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherInSchoolOrCampus])
 def update_assessments(request):
     if request.method == 'PUT':
-        teacher_id = request.user.id
-        teacher = User.objects.get(id=teacher_id)
+        teacher = request.user  # Get the authenticated user (teacher)
 
-        assessments_data = request.data.get('assessments', [])  # Get the list of assessment data from the request
-
-        user = request.user  # Get the authenticated user (teacher)
+        assessments_data = request.data.get('assessments', [])  # List of assessments to update
         
         updated_assessments = []
         errors = []
         
         for data in assessments_data:
+            assessment_id = data.pop('assessment_id', None)
             class_id = data.pop('class_id', None)
             subject_id = data.pop('subject', None)
-            student = data.pop('student', None)
-            if subject_id is None:
-                errors.append({'detail': 'Subject ID is required.'})
-                continue
-
-            # Retrieve the subject based on the subject_id
-            try:
-                subject = Subject.objects.get(pk=subject_id)
-            except Subject.DoesNotExist:
-                errors.append({'detail': f'Subject with ID {subject_id} does not exist.'})
-                continue
-
-            class_id = Class.objects.get(pk=class_id)
-
-            assessment_id = data.pop('assessment_id', None)
-            if assessment_id is None:
-                errors.append({'detail': 'Assessment ID is required.'})
-                continue
-            
-            # Check if the assessment exists
-            try:
-                assessment_instance = Assessment.objects.get(pk=assessment_id)
-            except Assessment.DoesNotExist:
-                errors.append({'detail': f'Assessment with ID {assessment_id} does not exist.'})
-                continue
-
-            # Validate class_id, student_id, and assessment_id
-            try:
-                class_instance = Class.objects.get(pk=class_id.pk)
-                print(class_instance.pk)
-                student_instance = Student.objects.get(pk=student)
-                print(student_instance.pk)
-                assessment_instance = Assessment.objects.get(pk=assessment_id)
-            except (Class.DoesNotExist, Student.DoesNotExist, Assessment.DoesNotExist) as e:
-                errors.append({'detail': str(e)})
-                continue
-
-            # Check if the teacher is assigned to teach the subject in the specified class
-            teacher_level_class = TeacherLevelClass.objects.filter(
-                teacher=user, class_id=assessment_instance.class_id, subjects_taught=assessment_instance.subject
-            ).first()
-            if not teacher_level_class:
-                errors.append({'detail': f'Teacher is not assigned to teach subject with ID {assessment_instance.subject.id} in class with ID {assessment_instance.class_id}'})
-                continue
-
+            student_id = data.pop('student', None)
+            school_id = data.pop('school', None)
+            campus_id = data.pop('campus', None)
             obtained_marks = data.pop('obtained_marks', None)
 
-            if student is None:
-                errors.append({'detail': 'Student data are required.'})
+            # Validate required fields
+            if not all([assessment_id, class_id, subject_id, student_id, school_id, campus_id]):
+                errors.append({'detail': 'Missing required fields in request data.', 'assessment_id': assessment_id})
                 continue
-            
-            print(f'{student_instance.pk}/n{teacher.pk}/n{subject.pk}/n{class_instance.pk}')
-            # Update assessment data
-            data['obtained_marks'] = obtained_marks
-            data['student'] = student_instance.pk
-            data['teacher'] = teacher.pk
-            data['subject'] = subject.pk  # Keep the subject unchanged
-            data['class_id'] = class_instance.pk  # Keep the class unchanged
+
+            # Fetch related models
+            try:
+                class_instance = Class.objects.get(pk=class_id)
+                student_instance = User.objects.get(pk=student_id, roles__name='Student')
+                subject_instance = Subject.objects.get(pk=subject_id)
+
+                # Fetch assessment and ensure it matches school & campus
+                assessment_instance = Assessment.objects.get(
+                    pk=assessment_id, school_id=school_id, campus_id=campus_id
+                )
+            except Class.DoesNotExist:
+                errors.append({'detail': f'Class with ID {class_id} not found.', 'assessment_id': assessment_id})
+                continue
+            except User.DoesNotExist:
+                errors.append({'detail': f'Student with ID {student_id} not found.', 'assessment_id': assessment_id})
+                continue
+            except Subject.DoesNotExist:
+                errors.append({'detail': f'Subject with ID {subject_id} not found.', 'assessment_id': assessment_id})
+                continue
+            except Assessment.DoesNotExist:
+                errors.append({'detail': f'Assessment with ID {assessment_id} does not exist in the specified school and campus.', 'assessment_id': assessment_id})
+                continue
+
+            # Ensure the teacher is assigned to teach this subject in the class
+            teacher_level_class = TeacherLevelClass.objects.filter(
+                teacher=teacher, class_id=class_instance, subjects_taught=subject_instance
+            ).exists()
+
+            if not teacher_level_class:
+                errors.append({'detail': f'Teacher is not assigned to teach subject {subject_id} in class {class_id}.', 'assessment_id': assessment_id})
+                continue
 
             # Update the assessment instance
-            serializer = AssessmentSerializer(assessment_instance, data=data, partial=True)
+            update_data = {
+                'obtained_marks': obtained_marks,
+                'student': student_instance.pk,
+                'teacher': teacher.pk,
+                'subject': subject_instance.pk,
+                'class_id': class_instance.pk,
+            }
+
+            serializer = AssessmentSerializer(assessment_instance, data=update_data, partial=True)
             if serializer.is_valid():
                 updated_instance = serializer.save()
                 updated_assessments.append(updated_instance)
             else:
-                errors.append(serializer.errors)
-        
+                errors.append({'assessment_id': assessment_id, 'errors': serializer.errors})
+
         if errors:
-            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            # Serialize the updated assessment instances
-            serializer = AssessmentSerializer(updated_assessments, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(AssessmentSerializer(updated_assessments, many=True).data, status=status.HTTP_200_OK)
+
     
 
 # Delete a student's assessment
 @api_view(['DELETE'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
-def delete_assessment(request, student_id, assessment_id):
-    print(f"Requested URL: {request.path}")  # Print the full requested URL
-    print(f"Student ID: {student_id}")  # Print the captured student ID
-    print(f"Assessment ID: {assessment_id}")  # Print the captured assessment ID
+@permission_classes([permissions.IsAuthenticated, IsTeacherInSchoolOrCampus])
+def delete_assessment(request, student_id, assessment_id, school_id, campus_id):
+    teacher = request.user  # Get the authenticated teacher
+
+    # Step 1: Check if the student exists
     try:
-        # Retrieve the student object
-        student = Student.objects.get(pk=student_id)
-    except Student.DoesNotExist:
-        # If the student does not exist, return a 404 Not Found response
+        student = User.objects.get(pk=student_id, roles__name='Student')
+    except User.DoesNotExist:
         return Response({'detail': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    # Step 2: Check if the assessment exists and belongs to the school/campus
     try:
-        # Retrieve the assessment object related to the student
-        assessment = Assessment.objects.get(pk=assessment_id, student_id=student)
+        assessment = Assessment.objects.get(
+            pk=assessment_id, student=student, school_id=school_id, campus_id=campus_id
+        )
     except Assessment.DoesNotExist:
-        # If the assessment does not exist for the student, return a 404 Not Found response
-        return Response({'detail': 'Assessment not found for the student.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'detail': 'Assessment not found for the student in this school and campus.'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Delete the assessment
+    # Step 3: Check if the teacher is assigned to teach the subject in this class
+    is_teacher_assigned = TeacherLevelClass.objects.filter(
+        teacher=teacher,
+        class_id=assessment.class_id,
+        subjects_taught=assessment.subject
+    ).exists()
+
+    if not is_teacher_assigned:
+        return Response(
+            {'detail': 'You are not assigned to teach this subject in this class. You cannot delete this assessment.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Step 4: Delete the assessment
     assessment.delete()
 
-    # Return a success message
     return Response({'detail': 'Assessment deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+
 
 
 # Fetch Classes a Teacher teaches subject(s) in
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherInSchoolOrCampus])
 def get_teacher_classes(request):
-    try:
-        teacher_id = request.user.id
-        teacher_classes = TeacherLevelClass.objects.filter(teacher_id=teacher_id)
-        serializer = TeacherLevelClassSerializer(teacher_classes, many=True)
-        return Response(serializer.data)
-    except TeacherLevelClass.DoesNotExist:
-        return Response(status=status.HTTP_404_NOT_FOUND)
+    teacher_id = request.user.id
+    school_id = request.query_params.get('school_id')
+    campus_id = request.query_params.get('campus_id')
+
+    # Filter classes by teacher, school, and campus
+    teacher_classes = TeacherLevelClass.objects.filter(teacher_id=teacher_id)
+
+    if school_id:
+        teacher_classes = teacher_classes.filter(school_id=school_id)
+
+    if campus_id:
+        teacher_classes = teacher_classes.filter(campus_id=campus_id)
+
+    # Serialize the filtered data
+    serializer = TeacherLevelClassSerializer(teacher_classes, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsTeacherInSchoolOrCampus])
 def filter_topics(request):
   """
   View to handle topic filtering based on search term.
@@ -1167,46 +1301,73 @@ def filter_topics(request):
 
 # Assign Students to Parents
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsParent])
+@permission_classes([permissions.IsAuthenticated, IsParentInSchoolOrCampus])
 def assign_students_to_parents(request):
     user = request.user
-    if user.user_type != 'Parent':
+
+    # Ensure only parents can assign students
+    if not user.has_role('Parent'):
         return Response({'error': 'Only parents can assign students'}, status=status.HTTP_403_FORBIDDEN)
 
     student_ids = request.data.get('student_ids')
     if not student_ids:
         return Response({'error': 'No students selected'}, status=status.HTTP_400_BAD_REQUEST)
 
+    school_id = user.school_id
+    campus_id = user.campus_id
+
+    assigned_students = []
+    errors = []
+
     for student_id in student_ids:
-        student = get_object_or_404(Student, id=student_id)
-        if StudentParentRelation.objects.filter(student=student).count() >= 2:
-            return Response({'error': f'Student {student.name} is already assigned to two parents'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            # Filter students by school, campus, and role (Student)
+            student = User.objects.get(id=student_id, roles__name='Student', school_id=school_id, campus_id=campus_id)
+            
+            # Ensure the student is not already assigned to two parents
+            if StudentParentRelation.objects.filter(student=student).count() >= 2:
+                errors.append({'error': f'Student {student.username} is already assigned to two parents'})
+                continue
 
-        # Check if the relation already exists for this parent
-        if StudentParentRelation.objects.filter(student=student, parent=user).exists():
-            return Response({'error': f'Student {student.name} is already assigned to you'}, status=status.HTTP_400_BAD_REQUEST)
+            # Ensure the student is not already assigned to this parent
+            if StudentParentRelation.objects.filter(student=student, parent=user).exists():
+                errors.append({'error': f'Student {student.username} is already assigned to you'})
+                continue
 
-        StudentParentRelation.objects.get_or_create(student=student, parent=user)
+            # Assign the student to the parent
+            StudentParentRelation.objects.get_or_create(student=student, parent=user)
+            assigned_students.append(student.username)
 
-    return Response({'message': 'Students assigned successfully'}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            errors.append({'error': f'Student with ID {student_id} not found in your school or campus'})
+
+    # Construct the response
+    if errors:
+        return Response({'assigned_students': assigned_students, 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({'message': 'Students assigned successfully', 'assigned_students': assigned_students}, status=status.HTTP_200_OK)
 
 
 # Fetch students assigned to a Parent as children
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsParent])
+@permission_classes([permissions.IsAuthenticated, IsParentInSchoolOrCampus])
 def get_students_assigned_to_parent(request):
     user = request.user
-    if user.user_type != 'Parent':
+
+    if user.has_role('Parent'):
         return Response({'error': 'Only parents can retrieve assigned students'}, status=status.HTTP_403_FORBIDDEN)
 
     assigned_students = StudentParentRelation.objects.filter(parent=user).select_related('student')
+
     students = [relation.student for relation in assigned_students]
-    serializer = StudentSerializer(students, many=True)
+
+    serializer = UserSerializer(students, many=True)
 
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 # Get Student and Parent info
 class StudentParentRelationView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
 
     def get(self, request, student_id=None):
         try:
@@ -1229,52 +1390,41 @@ class StudentParentRelationView(APIView):
         
 
 @api_view(['DELETE'])
-@permission_classes([permissions.IsAuthenticated, IsParent])
+@permission_classes([permissions.IsAuthenticated, IsParentInSchoolOrCampus])
 def delete_child(request, student_id):
-    try:
-        # Ensure the user is a parent
-        if request.user.user_type != 'Parent':
-            return Response({'error': 'You do not have permission to perform this action.'}, status=status.HTTP_403_FORBIDDEN)
+    # Ensure the user is a parent
+    if not request.user.has_role('Parent'):
+        return Response({'error': 'You do not have permission to perform this action.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Get the StudentParentRelation object
-        relation = get_object_or_404(StudentParentRelation, student_id=student_id, parent=request.user)
+    # Try to get the StudentParentRelation object (get_object_or_404 will raise 404 if not found)
+    relation = get_object_or_404(StudentParentRelation, student__id=student_id, parent=request.user)
 
-        # Delete the relationship
-        relation.delete()
+    # Delete the relationship
+    relation.delete()
 
-        return Response({'message': 'Student successfully removed from your children list.'}, status=status.HTTP_204_NO_CONTENT)
-    
-    except StudentParentRelation.DoesNotExist:
-        return Response({'error': 'The specified student is not listed under your children.'}, status=status.HTTP_404_NOT_FOUND)
-    
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({'message': 'Student successfully removed from your children list.'}, status=status.HTTP_204_NO_CONTENT)
 
 
 class ChildrenPerformanceView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsParent]
+    permission_classes = [permissions.IsAuthenticated, IsParentInSchoolOrCampus]
 
-    def get(self, request, class_id, student_id, semester, assessment_type, subject_id):
+    def get(self, request, class_id, student_id, term, assessment_name, subject_id):
         try:
-            student = Student.objects.get(id=student_id)
+            student = User.objects.get(id=student_id)
             class_instance = Class.objects.get(id=class_id)
 
             assessments = Assessment.objects.filter(
                 student_id=student_id,
                 class_id=class_id,
                 subject=subject_id,
-                assessment_type=assessment_type,
+                assessment_name=assessment_name,
             )
 
-            if assessment_type in ['Exercise', 'Assignment'] and semester:
-                assessments = assessments.filter(semester=semester)
-            elif assessment_type not in ['Exercise', 'Assignment', 'Final Exams', 'Mid Term Exams']:
-                assessments = assessments.exclude(semester__in=['1st Semester', '2nd Semester'])
 
             serializer = AssessmentSerializer(assessments, many=True)
             return Response({'assessments': serializer.data}, status=status.HTTP_200_OK)
 
-        except Student.DoesNotExist:
+        except User.DoesNotExist:
             return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
         except Class.DoesNotExist:
             return Response({'error': 'Class not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1286,25 +1436,25 @@ class ChildrenPerformanceView(APIView):
             # Extract parameters from request data
             student_id = request.data.get('student_id')
             class_id = request.data.get('class_id')
-            assessment_type = request.data.get('assessment_type')
+            assessment_name = request.data.get('assessment_name')
             subject_id = request.data.get('subject_id')
-            semester = request.data.get('semester')
+            term = request.data.get('term')
 
             # Perform the semester and assessment type check to filter data
-            if assessment_type in ['Exercise', 'Assignment'] and semester:
+            if assessment_name in ['Exercise', 'Assignment'] and term:
                 assessments = Assessment.objects.filter(
                     student_id=student_id,
                     class_id=class_id,
                     subject=subject_id,
-                    assessment_type=assessment_type,
-                    semester=semester
+                    assessment_name=assessment_name,
+                    term=term
                 )
-            elif assessment_type not in ['Exercise', 'Assignment', 'Final Exams', 'Mid Term Exams']:
+            elif assessment_name not in ['Exercise', 'Assignment', 'Final Exams', 'Mid Term Exams']:
                 assessments = Assessment.objects.filter(
                     student_id=student_id,
                     class_id=class_id,
                     subject=subject_id,
-                    assessment_type=assessment_type
+                    assessment_name=assessment_name
                 ).exclude(
                     semester__in=['1st Semester', '2nd Semester']
                 )
@@ -1313,14 +1463,14 @@ class ChildrenPerformanceView(APIView):
                     student_id=student_id,
                     class_id=class_id,
                     subject=subject_id,
-                    assessment_type=assessment_type
+                    assessment_type=assessment_name
                 )
 
             # Serialize the filtered queryset into JSON
             serializer = AssessmentSerializer(assessments, many=True)
             return Response({'assessments': serializer.data}, status=status.HTTP_200_OK)
 
-        except Student.DoesNotExist:
+        except User.DoesNotExist:
             return Response({'error': 'Student not found.'}, status=status.HTTP_404_NOT_FOUND)
         except Class.DoesNotExist:
             return Response({'error': 'Class not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1329,7 +1479,7 @@ class ChildrenPerformanceView(APIView):
         
 
 class HistoricalSubjectPerformanceView(APIView):
-    permission_classes = [permissions.IsAuthenticated | IsParent | IsTeacher | IsHeadmaster]
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
 
     def get(self, request, student_id):
         # Retrieve relevant assessments for the student
@@ -1381,24 +1531,51 @@ class HistoricalSubjectPerformanceView(APIView):
 
 
 class HistoricalPerformanceView(APIView):
-    permission_classes = [permissions.IsAuthenticated | IsParent | IsTeacher | IsHeadmaster]
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
 
     def get(self, request, student_id):
-        # Retrieve all assessments for the student
-        assessments = Assessment.objects.filter(student_id=student_id)
+        # Get the requesting user's school and campus
+        user = request.user
+        school_id = user.school_id
+        campus_id = user.campus_id
+
+        if not school_id or not campus_id:
+            return Response(
+                {"detail": "User is not associated with a school or campus."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Ensure the student belongs to the same school and campus as the requesting user
+        student = get_object_or_404(
+            User,
+            id=student_id,
+            roles__name='Student',
+            school_id=school_id,
+            campus_id=campus_id
+        )
+
+        # Filter assessments by student, school, and campus
+        assessments = Assessment.objects.filter(
+            student=student,
+            school_id=school_id,
+            campus_id=campus_id
+        )
 
         if not assessments.exists():
-            return Response({"detail": "No assessments found for this student."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "No assessments found for this student in your school and campus."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         # Calculate average score for each subject per academic year and class
         performances = assessments.values(
             'subject', 'class_id', 'class_id__academic_year'
         ).annotate(
-            semester_score=Avg('obtained_marks')
+            term_score=Avg('obtained_marks')
         ).values(
             'subject', 'class_id', 'class_id__academic_year'
         ).annotate(
-            academic_year_average=Avg('semester_score')
+            academic_year_average=Avg('term_score')
         )
 
         # Convert to SubjectPerformance model and serialize the data
@@ -1417,17 +1594,18 @@ class HistoricalPerformanceView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+
 # Class view for calculating the average of topic assessment marks for both exercise and assignment.
 class WeightedTopicPerformanceView(APIView):
-    permission_classes = [permissions.IsAuthenticated | IsParent | IsTeacher | IsHeadmaster]
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
 
-    def get(self, request, student_id, class_id, subject_id, semester):
+    def get(self, request, student_id, class_id, subject_id, term):
         # Calculate counts and average marks for both exercises and assignments
         topic_performance = Assessment.objects.filter(
             student_id=student_id,
             class_id=class_id,
             subject_id=subject_id,
-            semester=semester,
+            term=term,
             assessment_type__in=['Exercise', 'Assignment']
         ).values('topic', 'assessment_type').annotate(
             count=Count('id'),
@@ -1706,7 +1884,7 @@ class StudentEndOfSemesterResultView(APIView):
         
 # Fetch Semester Results with class_id, academic year & semester
 class SemesterResultsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
 
     def post(self, request):
         try:
@@ -1732,8 +1910,9 @@ class SemesterResultsView(APIView):
         
 
 @api_view(['POST'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher])
+@permission_classes([permissions.IsAuthenticated, IsAssignedTeacher])
 def create_timetable(request):
+    user = request.user  # Get the requesting user
     class_id = request.data.get('class_id')
     timetable_entries = request.data.get('timetable_entries', [])
 
@@ -1742,11 +1921,20 @@ def create_timetable(request):
     except Class.DoesNotExist:
         return Response({"error": "Class not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    # Ensure the requesting user belongs to the same school and campus as the class
+    if class_instance.school_id != user.school_id or class_instance.campus_id != user.campus_id:
+        return Response(
+            {"error": "You can only create timetables for your assigned school and campus."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     # Assign a default class for the 'Break' subject
     break_subject, _ = Subject.objects.get_or_create(
         name='Break',
         defaults={'class_id': class_instance}
     )
+
+    created_entries = []  # Track created entries for response
 
     for entry in timetable_entries:
         subject_id = entry.get('subject')
@@ -1754,9 +1942,9 @@ def create_timetable(request):
         start_time = entry.get('startTime')
         end_time = entry.get('endTime')
 
-        subject_instance = break_subject if not subject_id else Subject.objects.get(id=subject_id)
+        subject_instance = break_subject if not subject_id else get_object_or_404(Subject, id=subject_id)
 
-        # Optional: Retrieve teacher if applicable
+        # Retrieve the teacher if applicable
         teacher = None
         if subject_id:
             teacher_class = TeacherLevelClass.objects.filter(
@@ -1765,7 +1953,10 @@ def create_timetable(request):
             ).first()
             teacher = teacher_class.teacher if teacher_class else None
 
-        TimeTable.objects.create(
+        # Create the timetable entry with school and campus details
+        timetable_entry = TimeTable.objects.create(
+            school_id=user.school_id,  # Assign school ID
+            campus_id=user.campus_id,  # Assign campus ID
             class_id=class_instance,
             subject=subject_instance,
             teacher=teacher,
@@ -1774,18 +1965,32 @@ def create_timetable(request):
             end_time=end_time,
         )
 
-    return Response({"message": "Timetable entries created successfully"}, status=status.HTTP_201_CREATED)
+        created_entries.append({
+            "class_id": class_instance.id,
+            "school_id": user.school_id,
+            "campus_id": user.campus_id,
+            "subject": subject_instance.name,
+            "teacher": teacher.username if teacher else None,
+            "day": day,
+            "start_time": start_time,
+            "end_time": end_time,
+        })
+
+    return Response(
+        {"message": "Timetable entries created successfully", "created_entries": created_entries},
+        status=status.HTTP_201_CREATED
+    )
 
 
 @api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated, IsTeacher | IsHeadmaster | IsParent])
+@permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus])
 def view_timetable(request, class_id):
-    print(class_id)
     timetable = TimeTable.objects.filter(class_id=class_id)
     serializer = TimeTableSerializer(timetable, many=True)
     return Response(serializer.data)
 
 @api_view(['PUT'])
+@permission_classes([permissions.IsAuthenticated, IsAssignedTeacher])
 def update_timetable(request, pk):
     """Update a specific timetable entry."""
     try:
@@ -1800,6 +2005,7 @@ def update_timetable(request, pk):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated, IsAssignedTeacher])
 def delete_timetable(request, pk):
     """Delete a specific timetable entry."""
     try:
@@ -1812,7 +2018,7 @@ def delete_timetable(request, pk):
 
 
 class AssessmentNameListCreateView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus]
 
     def get(self, request):
         """List all assessment names created by admin (teacher=null)"""
@@ -1856,7 +2062,7 @@ class AssessmentNameListCreateView(APIView):
         return Response(created_assessments, status=status.HTTP_201_CREATED)
 
 class AssessmentNameDetailView(APIView):
-    permission_classes = [IsAdminOrAssignedTeacher]  # Admins or assigned teachers can edit/delete
+    permission_classes = [IsTeacherOrAdminInSchoolOrCampus]  # Admins or assigned teachers can edit/delete
 
     def get_object(self, pk):
         try:
@@ -1917,7 +2123,22 @@ class LevelCRUDView(
     """
     queryset = Level.objects.all()
     serializer_class = LevelSerializer
-    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+    permission_classes = [permissions.IsAuthenticated]  
+
+    def get_permissions(self):
+        """
+        Assign different permissions based on the request method.
+        """
+        if self.request.method in ["GET"]:  # List and Retrieve
+            return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
+        
+        elif self.request.method in ["POST", "PUT", "PATCH"]:  # Create and Update
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        elif self.request.method == "DELETE":  # Delete
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus(), permissions.IsAdminUser()]
+        
+        return super().get_permissions()
 
     def get_queryset(self):
         """
@@ -2042,7 +2263,23 @@ class TermsCRUDView(
     """
     queryset = Terms.objects.all()
     serializer_class = TermsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus | IsRegisteredInSchoolOrCampus]  
+
+    permission_classes = [permissions.IsAuthenticated]  
+
+    def get_permissions(self):
+        """
+        Assign different permissions based on the request method.
+        """
+        if self.request.method in ["GET"]:  # List and Retrieve
+            return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
+        
+        elif self.request.method in ["POST", "PUT", "PATCH"]:  # Create and Update
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        elif self.request.method == "DELETE":  # Delete
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus(), permissions.IsAdminUser()]
+        
+        return super().get_permissions()
     
     def get_queryset(self):
         queryset = super().get_queryset()

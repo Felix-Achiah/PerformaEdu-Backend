@@ -22,6 +22,11 @@ urlpatterns = [
     path('subjects/', views.SubjectCRUDView.as_view(), name='subject-list-create'),
     path('subjects/<int:pk>/', views.SubjectCRUDView.as_view(), name='subject-detail'),
 
+    # API endpoints for Class Subjects
+    path('class-subjects/<int:class_id>/', views.ManageClassSubjectsView.as_view(), name='view_class_subjects'),
+    path('class-subjects/', views.ManageClassSubjectsView.as_view(), name='assign_class_subjects'),
+    path('class-subjects/<int:pk>/', views.ManageClassSubjectsView.as_view(), name='update_delete_class_subject'),
+
     # API endpoints for Student
     path('get-students/', views.get_students_by_class_id, name='get_students_by_class_id'),
     path('get-student/<int:student_id>/', views.get_student, name='get_student'),
@@ -29,14 +34,15 @@ urlpatterns = [
 
     # API endpoints for Student Assessment
     path('create-student-assessments/', views.create_assessments, name='create_assessments'),
-    path('get-student-assessments/<int:student_id>/<str:semester>/<int:subject_id>/<str:assessment_type>/', views.get_student_assessments, name='get_student_assessments'),
-    path('get-student-assessment/<int:student_id>/<int:assessment_id>/', views.get_student_assessment, name='get_student_assessment'),
+    path('get-student-assessments/<int:student_id>/<int:term>/<int:subject_id>/<int:assessment_name>/<int:school_id>/<int:campus_id>/', views.get_student_assessments, name='get_student_assessments'),
+    path('get-student-assessment/<int:student_id>/<int:assessment_id>/<int:school_id>/<int:campus_id>/', views.get_student_assessment, name='get_student_assessment'),
     path('student-parent-info/<int:student_id>/', views.StudentParentRelationView.as_view(), name='student-relations'),
+    path('update-student-assessments/', views.update_assessments, name='update_assessments'),
+    path('delete-student-assessment/<int:student_id>/<int:assessment_id>/<int:school_id>/<int:campus_id>/', views.delete_assessment, name='delete_assessment'),
 
     # Endpoint for fetching historical and current student assessment data
     path('fetch-historical-assessment-data/', views.fetch_historical_assessment_data, name='fetch_historical_assessment_data'),
-    path('get-student-exams-assessments/<int:student_id>/<int:subject_id>/<str:assessment_type>/', views.get_student_exams_assessments, name='get_student_exams_assessments'),
-    path('update-student-assessments/', views.update_assessments, name='update_assessments'),
+    path('get-student-exams-assessments/<int:student_id>/<int:subject_id>/<int:assessment_name>/<int:school_id>/<int:campus_id>/', views.get_student_exams_assessments, name='get_student_exams_assessments'),
     path('student/<int:student_id>/performance/', views.HistoricalPerformanceView.as_view(), name='student-performance'),
     
     # Endpoint for fetching exercise and assignment topic performance and comparing them

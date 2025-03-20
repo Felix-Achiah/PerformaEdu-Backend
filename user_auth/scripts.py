@@ -1,4 +1,5 @@
-from .models import User, Role
+
+from user_auth.models import User, Role
 
 # Create roles if they don't exist
 teacher_role, _ = Role.objects.get_or_create(name='Teacher')
@@ -8,5 +9,5 @@ parent_role, _ = Role.objects.get_or_create(name='Parent')
 student_role, _ = Role.objects.get_or_create(name='Student')
 
 # Assign roles to a user
-user = User.objects.get(email='"nanaama@email.com"')
-user.roles.add(parent_role)
+# user = User.objects.get(email='"nanaama@email.com"')
+# user.roles.add(teacher_role)
