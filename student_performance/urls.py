@@ -5,27 +5,27 @@ from . import views
 urlpatterns = [
     # API endpoints for Class
     path('create-class/', views.create_class, name='create_class'),
-    path('get-class/<int:class_id>/', views.retrieve_class, name='retrieve_class'),
-    path('get-all-classes/', views.get_all_classes, name='retrieve_class'),
-    path('update-class/<int:class_id>/', views.update_class, name='update_class'),
-    path('delete-class/<int:class_id>/', views.delete_class, name='delete_class'),
+    path('get-class/<uuid:class_id>/', views.retrieve_class, name='retrieve_class'),
+    path('get-all-classes/<uuid:level_id>/', views.get_all_classes, name='retrieve_class'),
+    path('update-class/<uuid:class_id>/', views.update_class, name='update_class'),
+    path('delete-class/<uuid:class_id>/', views.delete_class, name='delete_class'),
 
     # API endpoints for Level
     path('levels/', views.LevelCRUDView.as_view(), name='level-list-create'),
-    path('levels/<int:pk>/', views.LevelCRUDView.as_view(), name='level-detail'),
+    path('levels/<uuid:pk>/', views.LevelCRUDView.as_view(), name='level-detail'),
 
     # API endpoints for Terms
     path('terms/', views.TermsCRUDView.as_view(), name='term-list-create'),
-    path('terms/<int:pk>/', views.TermsCRUDView.as_view(), name='term-detail'),
+    path('terms/<uuid:pk>/', views.TermsCRUDView.as_view(), name='term-detail'),
 
     # API endpoints for Subject
     path('subjects/', views.SubjectCRUDView.as_view(), name='subject-list-create'),
-    path('subjects/<int:pk>/', views.SubjectCRUDView.as_view(), name='subject-detail'),
+    path('subjects/<uuid:pk>/', views.SubjectCRUDView.as_view(), name='subject-detail'),
 
     # API endpoints for Class Subjects
-    path('class-subjects/<int:class_id>/', views.ManageClassSubjectsView.as_view(), name='view_class_subjects'),
+    path('class-subjects/<uuid:class_id>/', views.ManageClassSubjectsView.as_view(), name='view_class_subjects'),
     path('class-subjects/', views.ManageClassSubjectsView.as_view(), name='assign_class_subjects'),
-    path('class-subjects/<int:pk>/', views.ManageClassSubjectsView.as_view(), name='update_delete_class_subject'),
+    path('class-subjects/<uuid:pk>/', views.ManageClassSubjectsView.as_view(), name='update_delete_class_subject'),
 
     # API endpoints for Student
     path('get-students/', views.get_students_by_class_id, name='get_students_by_class_id'),

@@ -981,7 +981,9 @@ def validate_token(request):
         user = User.objects.get(id=payload["user_id"])
         return Response({
             "id": user.id,
-            "username": user.username
+            "username": user.username,
+            "school_id": user.school,
+            "campus_id": user.campus,
         })
     except jwt.ExpiredSignatureError:
         return Response({"error": "Token expired"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -999,7 +1001,6 @@ class ValidateStudentAPIView(APIView):
     def get(self, request, student_id):
         try:
             student = User.objects.get(id=student_id)
-            print(student)
             return Response({
                 'id': student.id,
                 'name': student.name,

@@ -4,39 +4,38 @@ from rest_framework.permissions import IsAuthenticated
 
 from user_auth.models import User, Role
 from student_performance.models import Student
-from user_auth.permissions import IsHeadmaster, IsTeacher
+from user_auth.permissions import IsHeadmaster, IsTeacher, IsRegisteredInSchoolOrCampus
 
 
 class HeadMasterDashboardStatisticsView(APIView):
-    permission_classes = [IsAuthenticated | IsHeadmaster | IsTeacher]  # Ensure only authenticated users can access this view
+    permission_classes = [IsAuthenticated, IsRegisteredInSchoolOrCampus]  # Only allow authenticated users registered in the school/campus
 
     def get(self, request, *args, **kwargs):
-        # Get the Role objects for Teacher and Parent
-        teacher_role = Role.objects.filter(name='Teacher').first()
-        parent_role = Role.objects.filter(name='Parent').first()
+        # Get the current user's school and campus
+        user_school_id = request.user.school_id
+        user_campus_id = request.user.campus_id
 
-        # Count the number of teachers
-        total_teachers = User.objects.filter(roles=teacher_role).count()
+        # Filter users based on school and campus
+        teachers = User.objects.filter(roles__name="Teacher", school_id=user_school_id, campus_id=user_campus_id)
+        parents = User.objects.filter(roles__name="Parent", school_id=user_school_id, campus_id=user_campus_id)
+        students = User.objects.filter(roles__name="Student", school_id=user_school_id, campus_id=user_campus_id)
 
-        # Count male and female teachers
-        male_teachers = User.objects.filter(roles=teacher_role, gender='Male').count()
-        female_teachers = User.objects.filter(roles=teacher_role, gender='Female').count()
+        # Count teachers
+        total_teachers = teachers.count()
+        male_teachers = teachers.filter(gender='Male').count()
+        female_teachers = teachers.filter(gender='Female').count()
 
-        # Count the number of parents
-        total_parents = User.objects.filter(roles=parent_role).count()
+        # Count parents
+        total_parents = parents.count()
+        male_parents = parents.filter(gender='Male').count()
+        female_parents = parents.filter(gender='Female').count()
 
-        # Count male and female parents
-        male_parents = User.objects.filter(roles=parent_role, gender='Male').count()
-        female_parents = User.objects.filter(roles=parent_role, gender='Female').count()
+        # Count students
+        total_students = students.count()
+        male_students = students.filter(gender='Male').count()
+        female_students = students.filter(gender='Female').count()
 
-        # Count the total number of students
-        total_students = Student.objects.count()
-
-        # Count male and female students
-        male_students = Student.objects.filter(gender='Male').count()
-        female_students = Student.objects.filter(gender='Female').count()
-
-        # Prepare the response data
+        # Prepare response data
         data = {
             'teachers': {
                 'total': total_teachers,
@@ -56,4 +55,3 @@ class HeadMasterDashboardStatisticsView(APIView):
         }
 
         return Response(data)
-

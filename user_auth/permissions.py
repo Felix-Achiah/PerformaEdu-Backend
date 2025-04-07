@@ -113,10 +113,10 @@ class IsRegisteredInSchoolOrCampus(BasePermission):
                 school_id = item.get('school')
                 campus_id = item.get('campus')
 
-                if school_id and user_school_id != int(school_id):
+                if school_id and str(user_school_id) != str(school_id):
                     return False
 
-                if campus_id and user_campus_id != int(campus_id):
+                if campus_id and str(user_campus_id) != str(campus_id):
                     campus = Campus.objects.filter(id=campus_id).first()
                     if not campus or user_school_id != campus.school_id:
                         return False

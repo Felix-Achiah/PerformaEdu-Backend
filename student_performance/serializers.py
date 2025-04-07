@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
 from .models import Class, TeacherLevelClass, TeacherAssignmentHistory , Subject, Assessment, ClassEnrollment, Student, HistoricalClassEnrollment, SubjectPerformance, ProcessedMarks, Level, Terms, StudentParentRelation, TimeTable, AssessmentName, ClassSubject
+from school.models import Campus, School
 from user_auth.serializers import UserSerializer
 from school.serializers import SchoolSerializer, CampusSerializer
 
@@ -55,12 +56,43 @@ class TermsSerializer(serializers.ModelSerializer):
 
 
 class ClassSerializer(serializers.ModelSerializer):
-    school = SchoolSerializer(read_only=True)  # Serialize school
-    campus = CampusSerializer(read_only=True)  # Serialize campus
-    level = serializers.CharField(source='level_type', read_only=True)  # Rename level_type to level
+    school = SchoolSerializer(read_only=True)  # Nested school data for response
+    school_id = serializers.UUIDField(write_only=True)  # Writable UUID for school
+    campus = CampusSerializer(read_only=True)  # Nested campus data for response
+    campus_id = serializers.UUIDField(write_only=True, required=False)  # Optional writable UUID for campus
+    level_name = serializers.CharField(source='level.name', read_only=True)  # Level name for response
+
     class Meta:
         model = Class
-        fields = ['id', 'name', 'level_type', 'level', 'school', 'campus', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'level', 'level_name', 'school', 'school_id', 'campus', 'campus_id', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'school': {'read_only': True},
+            'campus': {'read_only': True},
+        }
+
+    def validate_school_id(self, value):
+        """Convert school_id UUID to a School instance."""
+        try:
+            return School.objects.get(id=value)
+        except School.DoesNotExist:
+            raise serializers.ValidationError(f"School with ID {value} does not exist.")
+
+    def validate_campus_id(self, value):
+        """Convert campus_id UUID to a Campus instance, if provided."""
+        if value is None:
+            return None
+        try:
+            return Campus.objects.get(id=value)
+        except Campus.DoesNotExist:
+            raise serializers.ValidationError(f"Campus with ID {value} does not exist.")
+
+    def create(self, validated_data):
+        """Custom create method to handle school and campus instances."""
+        school = validated_data.pop('school_id')  # Get the School instance
+        campus = validated_data.pop('campus_id', None)  # Get the Campus instance, if provided
+        # Create the Class instance with school and campus
+        class_instance = Class.objects.create(school=school, campus=campus, **validated_data)
+        return class_instance
 
 
 class ClassEnrollmentSerializer(serializers.ModelSerializer):

@@ -11,13 +11,13 @@ from student_performance.serializers import TeacherLevelClassSerializer
 from user_auth.models import User
 from user_auth.serializers import UserSerializer
 from .serializers import AssignSubjectsToTeachersSerializer, AcademicYearSerializer
-from user_auth.permissions import IsAdmin, IsTeacherOrAdmin
+from user_auth.permissions import IsAdmin, IsTeacherOrAdmin, IsTeacherOrAdminInSchoolOrCampus, IsRegisteredInSchoolOrCampus
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
 class AssignSubjectsToTeachersView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdmin, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus]
     def post(self, request, *args, **kwargs):
         if not isinstance(request.data, list):
             return Response(
@@ -73,7 +73,7 @@ class AssignSubjectsToTeachersView(APIView):
 
 
 class TeacherSubjectsByClassView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
     def get(self, request, class_id):
         try:
             # Fetch all TeacherLevelClass records for the given class_id
@@ -94,7 +94,7 @@ class TeacherSubjectsByClassView(APIView):
     
 
 class UpdateTeacherSubjectsView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin, IsTeacherOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus]
 
     def put(self, request, *args, **kwargs):
         teacher_id = request.data.get("teacher_id")
@@ -141,6 +141,18 @@ class UpdateTeacherSubjectsView(APIView):
 class AcademicYearListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        """
+        Assign different permissions based on the request method.
+        """
+        if self.request.method in ["GET"]:  # List and Retrieve
+            return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
+        
+        elif self.request.method in ["POST"]:  # Create
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        return super().get_permissions()
+
     def get(self, request):
         academic_years = AcademicYear.objects.all()
         serializer = AcademicYearSerializer(academic_years, many=True)
@@ -184,24 +196,33 @@ class AcademicYearListCreateView(APIView):
 
 class ActiveAcademicYearView(generics.RetrieveAPIView):
     """
-    A view to fetch the currently active academic year.
+    A view to fetch the currently active academic year for the user's school and campus.
     Returns a single object or 404 if no active year exists.
     """
+    permission_classes = [permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus]
     serializer_class = AcademicYearSerializer
 
     def get_object(self):
-        # Fetch the first academic year where is_active is True
-        try:
-            return AcademicYear.objects.get(is_active=True)
-        except AcademicYear.DoesNotExist:
-            self.handle_no_active_year()
-        except AcademicYear.MultipleObjectsReturned:
-            # In case multiple active years exist, return the latest one
-            return AcademicYear.objects.filter(is_active=True).first()
+        # Get the current user's school and campus
+        user_school_id = self.request.user.school_id
+        user_campus_id = self.request.user.campus_id
 
-    def handle_no_active_year(self):
-        # Customize the response when no active year is found
-        raise generics.Http404("No active academic year found.")
+        try:
+            # Fetch the active academic year for the user's school and campus
+            return AcademicYear.objects.get(
+                is_active=True, 
+                school_id=user_school_id, 
+                campus_id=user_campus_id
+            )
+        except AcademicYear.DoesNotExist:
+            raise NotFound("No active academic year found for your school and campus.")
+        except AcademicYear.MultipleObjectsReturned:
+            # If multiple active years exist, return the most recent one
+            return AcademicYear.objects.filter(
+                is_active=True, 
+                school_id=user_school_id, 
+                campus_id=user_campus_id
+            ).order_by('-start_date').first()
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -212,10 +233,38 @@ class ActiveAcademicYearView(generics.RetrieveAPIView):
 
 # Retrieve, Update, Delete Academic Year
 class AcademicYearDetailView(APIView):
+    """
+    API view to retrieve, update, and delete academic years,
+    ensuring that users can only manage academic years linked to their school and campus.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        """
+        Assign different permissions based on the request method.
+        """
+        if self.request.method == "GET":  # Retrieve
+            return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
+        
+        elif self.request.method in ["PUT", "PATCH"]:  # Update
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        elif self.request.method == "DELETE":  # Delete
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
+        
+        return super().get_permissions()
+
     def get_object(self, pk):
-        return get_object_or_404(AcademicYear, pk=pk)
+        """
+        Fetch the academic year, ensuring it belongs to the user's school and campus.
+        """
+        user = self.request.user
+        return get_object_or_404(
+            AcademicYear, 
+            pk=pk, 
+            school_id=user.school_id, 
+            campus_id=user.campus_id
+        )
 
     def get(self, request, pk):
         academic_year = self.get_object(pk)
@@ -225,10 +274,15 @@ class AcademicYearDetailView(APIView):
     def put(self, request, pk):
         academic_year = self.get_object(pk)
         serializer = AcademicYearSerializer(academic_year, data=request.data)
+
         if serializer.is_valid():
-            # Ensure only one active academic year
+            # Ensure only one active academic year per school and campus
             if serializer.validated_data.get('is_active', False):
-                AcademicYear.objects.filter(is_active=True).exclude(id=pk).update(is_active=False)
+                AcademicYear.objects.filter(
+                    is_active=True, 
+                    school_id=request.user.school_id, 
+                    campus_id=request.user.campus_id
+                ).exclude(id=pk).update(is_active=False)
 
             serializer.save()
             return Response(serializer.data)
@@ -236,24 +290,34 @@ class AcademicYearDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     def patch(self, request, pk):
-        try:
-            academic_year = AcademicYear.objects.get(pk=pk)
-        except AcademicYear.DoesNotExist:
-            return Response({"error": "Academic Year not found."}, status=status.HTTP_404_NOT_FOUND)
+        """
+        Set a specific academic year as active and deactivate others in the same school and campus.
+        """
+        academic_year = self.get_object(pk)
 
-        # Deactivate all active years
-        AcademicYear.objects.filter(is_active=True).update(is_active=False)
+        # Deactivate all active years in the same school and campus
+        AcademicYear.objects.filter(
+            is_active=True, 
+            school_id=request.user.school_id, 
+            campus_id=request.user.campus_id
+        ).update(is_active=False)
         
         # Activate the selected academic year
         academic_year.is_active = True
         academic_year.save()
 
-        return Response({"success": f"Academic Year {academic_year.start_year}/{academic_year.end_year} is now active."}, status=status.HTTP_200_OK)
+        return Response(
+            {"success": f"Academic Year {academic_year.start_year}/{academic_year.end_year} is now active."}, 
+            status=status.HTTP_200_OK
+        )
 
     def delete(self, request, pk):
+        """
+        Delete an academic year, ensuring it's within the user's school and campus.
+        """
         academic_year = self.get_object(pk)
         academic_year.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"success": "Academic Year deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
     
 
 class ParentsByClassView(APIView):

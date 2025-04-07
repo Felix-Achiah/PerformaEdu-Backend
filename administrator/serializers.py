@@ -16,4 +16,4 @@ class AssignSubjectsToTeachersSerializer(serializers.ModelSerializer):
 class AcademicYearSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcademicYear
-        fields = ['id', 'start_year', 'end_year', 'is_active']
+        fields = ['id', 'start_year', 'end_year', 'school', 'campus', 'is_active']

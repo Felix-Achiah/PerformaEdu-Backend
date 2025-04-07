@@ -22,7 +22,7 @@ from rest_framework.mixins import (
 from .assign_grade import assign_grade
 from .consolidate_subject_data import consolidate_subject_data
 from .get_position_suffix import get_position_suffix
-from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAdminOrAssignedTeacher, IsAssignedTeacher, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus, IsHeadmasterInSchoolOrCampus, IsTeacherInSchoolOrCampus, IsParentInSchoolOrCampus
+from user_auth.permissions import IsParent, IsHeadmaster, IsTeacher, IsAssignedTeacher, IsRegisteredInSchoolOrCampus, IsTeacherOrAdminInSchoolOrCampus, IsHeadmasterInSchoolOrCampus, IsTeacherInSchoolOrCampus, IsParentInSchoolOrCampus
 from .models import Class, Subject, TeacherLevelClass, Student, ClassEnrollment, HistoricalClassEnrollment, Assessment, StudentParentRelation, SubjectPerformance, ProcessedMarks, TimeTable, AssessmentName, Level, Terms, ClassSubject
 from user_auth.models import User, Role
 from user_auth.serializers import UserSerializer
@@ -52,48 +52,42 @@ def create_class(request):
             return Response(serializer.data[0], status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# Retrieve all classes created
+# Retrieve All Classes under a specific Level
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated, IsRegisteredInSchoolOrCampus | IsTeacherOrAdminInSchoolOrCampus])
-def get_all_classes(request):
-    """
-    Retrieve all classes under a specific level, filtered by the user's school_id.
-    Query params:
-    - level: The ID of the Level to filter classes by (required)
-    """
+def get_all_classes(request, level_id):
     if request.method == 'GET':
         user = request.user
-        level_id = request.query_params.get('level')  # Expecting level ID, not level_type
-
-        # Check if level_id is provided
-        if not level_id:
-            return Response({'error': 'Please provide a level parameter with a valid Level ID'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Ensure the level exists
             level = Level.objects.get(id=level_id)
         except Level.DoesNotExist:
             return Response({'error': f'Level with ID {level_id} does not exist'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Base queryset for classes under the specified level
         classes = Class.objects.filter(level=level)
+        logger.info(f"Initial classes count for level {level_id}: {classes.count()}")
 
-        # Filter by user's school_id from token or user object
-        school_id = request.auth.get('school_id') if request.auth else user.school_id
+        school_id = request.auth.get('school_id') if request.auth else (user.school.id if user.school else None)
+        logger.info(f"User: {user}, School ID: {school_id}")
         if school_id:
             classes = classes.filter(school_id=school_id)
+            logger.info(f"Classes after school filter: {classes.count()}")
         else:
             logger.warning(f"User {user} has no school_id, returning empty class list")
-            classes = classes.none()  # Empty queryset if no school
+            classes = classes.none()
 
-        # Optionally filter by user's campus_id
-        campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
-        if campus_id:
+        campus_id = request.auth.get('campus_id') if request.auth else (user.campus.id if user.campus else None)
+        logger.info(f"Campus ID: {campus_id}")
+        if campus_id and classes.filter(campus__isnull=False).exists():
+            # Only filter by campus_id if there are classes with a non-null campus
             classes = classes.filter(campus_id=campus_id)
+            logger.info(f"Classes after campus filter: {classes.count()}")
+        else:
+            logger.info("Skipping campus filter as classes have null campus or no filter needed")
 
-        # Allow superusers to bypass tenancy filters
         if user.is_superuser:
             classes = Class.objects.filter(level=level)
+            logger.info(f"Superuser override, classes count: {classes.count()}")
 
         if not classes.exists():
             return Response({'message': f'No classes found under Level {level.id} for your school/campus'}, status=status.HTTP_200_OK)
@@ -143,37 +137,33 @@ def retrieve_class(request, class_id):
 @api_view(['PUT'])
 @permission_classes([permissions.IsAuthenticated, IsTeacherOrAdminInSchoolOrCampus])
 def update_class(request, class_id):
-    """
-    Update a class, ensuring it belongs to the user's school.
-    Args:
-        class_id: The ID of the class to update.
-    """
     try:
         class_obj = Class.objects.get(id=class_id)
     except Class.DoesNotExist:
         return Response({'error': 'Class not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Get user's school_id and campus_id from token or user object
     user = request.user
     school_id = request.auth.get('school_id') if request.auth else user.school_id
     campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
 
-    # Enforce tenancy: Check if the class belongs to the user's school
-    if school_id and class_obj.school_id != school_id:
+    # Log for debugging
+    logger.info(f"User: {user}, School ID: {school_id}, Campus ID: {campus_id}")
+    logger.info(f"Class: {class_id}, School: {class_obj.school}, Campus: {class_obj.campus}")
+
+    # Enforce school tenancy
+    if school_id and str(class_obj.school_id) != str(school_id):
         logger.warning(f"User {user} attempted to update class {class_id} outside their school {school_id}")
         return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Optionally check campus_id
-    if campus_id and class_obj.campus_id != campus_id:
+    # Relaxed campus check: only enforce if class has a campus
+    if campus_id and class_obj.campus and str(class_obj.campus_id) != str(campus_id):
         logger.warning(f"User {user} attempted to update class {class_id} outside their campus {campus_id}")
         return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Allow superusers to bypass tenancy restrictions
     if user.is_superuser:
-        pass  # No additional filtering needed
+        pass
 
-    # Update the class
-    serializer = ClassSerializer(class_obj, data=request.data, partial=True)  # Use PUT (full update)
+    serializer = ClassSerializer(class_obj, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
         logger.info(f"User {user} updated class {class_id}")
@@ -199,15 +189,15 @@ def delete_class(request, class_id):
     school_id = request.auth.get('school_id') if request.auth else user.school_id
     campus_id = request.auth.get('campus_id') if request.auth else user.campus_id
 
-    # Enforce tenancy: Check if the class belongs to the user's school
-    if school_id and class_obj.school_id != school_id:
-        logger.warning(f"User {user} attempted to delete class {class_id} outside their school {school_id}")
-        return Response({'error': 'You do not have permission to delete this class'}, status=status.HTTP_403_FORBIDDEN)
+    # Enforce school tenancy
+    if school_id and str(class_obj.school_id) != str(school_id):
+        logger.warning(f"User {user} attempted to update class {class_id} outside their school {school_id}")
+        return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Optionally check campus_id
-    if campus_id and class_obj.campus_id != campus_id:
-        logger.warning(f"User {user} attempted to delete class {class_id} outside their campus {campus_id}")
-        return Response({'error': 'You do not have permission to delete this class'}, status=status.HTTP_403_FORBIDDEN)
+    # Relaxed campus check: only enforce if class has a campus
+    if campus_id and class_obj.campus and str(class_obj.campus_id) != str(campus_id):
+        logger.warning(f"User {user} attempted to update class {class_id} outside their campus {campus_id}")
+        return Response({'error': 'You do not have permission to update this class'}, status=status.HTTP_403_FORBIDDEN)
 
     # Allow superusers to bypass tenancy restrictions
     if user.is_superuser:
@@ -2123,62 +2113,85 @@ class LevelCRUDView(
     """
     queryset = Level.objects.all()
     serializer_class = LevelSerializer
-    permission_classes = [permissions.IsAuthenticated]  
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_permissions(self):
-        """
-        Assign different permissions based on the request method.
-        """
-        if self.request.method in ["GET"]:  # List and Retrieve
+        if self.request.method in ["GET"]:
             return [permissions.IsAuthenticated(), IsRegisteredInSchoolOrCampus()]
-        
-        elif self.request.method in ["POST", "PUT", "PATCH"]:  # Create and Update
+        elif self.request.method in ["POST", "PUT", "PATCH"]:
             return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
-        
-        elif self.request.method == "DELETE":  # Delete
-            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus(), permissions.IsAdminUser()]
-        
+        elif self.request.method == "DELETE":
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
         return super().get_permissions()
 
     def get_queryset(self):
         """
-        Filter levels to only those in the user's school/campus.
+        Filter levels by user's school, with optional campus filtering.
         """
         queryset = super().get_queryset()
         user = self.request.user
-        if not user.is_superuser:  # Superusers see all
-            if user.school:
-                queryset = queryset.filter(school=user.school)
-            if user.campus:
-                queryset = queryset.filter(campus=user.campus)
+        token = self.request.auth
+        logger.debug(f"User: {user}, School: {user.school}, Campus: {user.campus}")
+        logger.debug(f"Token: {token}")
+
+        if not user.is_superuser:
+            school_id = token.get('school_id') if token else (user.school.id if user.school else None)
+            campus_id = token.get('campus_id') if token else (user.campus.id if user.campus else None)
+
+            logger.debug(f"Filtering with school_id: {school_id}, campus_id: {campus_id}")
+
+            if school_id:
+                queryset = queryset.filter(school_id=school_id)
+            else:
+                logger.warning(f"User {user} has no school, returning empty queryset")
+                queryset = queryset.none()
+
+            if campus_id and queryset.filter(campus_id__isnull=False).exists():
+                queryset = queryset.filter(campus_id=campus_id)
+            else:
+                logger.debug("Skipping campus_id filter as levels have null campus or no campus filter needed")
+
+        logger.debug(f"Queryset count: {queryset.count()}, PK in kwargs: {self.kwargs.get('pk')}")
         return queryset
-    
+
     def get_object(self):
         """
-        Optimize retrieval with select_related for school and campus.
+        Retrieve a single level with tenancy enforcement.
         """
         queryset = self.get_queryset().select_related('school', 'campus')
-        obj = generics.get_object_or_404(queryset, pk=self.kwargs['pk'])
+        pk = self.kwargs.get('pk')
+        logger.debug(f"Attempting to retrieve level with pk={pk} from queryset with {queryset.count()} items")
+        
+        try:
+            obj = queryset.get(pk=pk)
+            logger.debug(f"Found level: {obj}")
+        except Level.DoesNotExist:
+            logger.warning(f"Level with pk={pk} not found in filtered queryset")
+            raise generics.Http404("No Level matches the given query.")
+        
         return obj
-    
+
     def check_tenancy(self, instance):
         """
-        Helper method to check if the instance belongs to the user's school/campus.
+        Check if the instance belongs to the user's school/campus.
         Allows actions within the same school even if campus differs.
         """
         user = self.request.user
-        school_id = self.request.auth.get('school_id') if self.request.auth else user.school_id
-        campus_id = self.request.auth.get('campus_id') if self.request.auth else user.campus_id
+        school_id = self.request.auth.get('school_id') if self.request.auth else (user.school.id if user.school else None)
+        campus_id = self.request.auth.get('campus_id') if self.request.auth else (user.campus.id if user.campus else None)
 
-        if school_id and instance.school_id != school_id:
-            logger.warning(f"User {user} denied access to subject {instance.id} (school mismatch: {school_id} vs {instance.school_id})")
+        instance_school_id = str(instance.school.id) if instance.school else None
+        instance_campus_id = str(instance.campus.id) if instance.campus else None
+
+        logger.debug(f"Checking tenancy: user school_id={school_id}, instance school_id={instance_school_id}")
+
+        if school_id and instance_school_id != school_id:
+            logger.warning(f"User {user} denied access to level {instance.id} (school mismatch: {school_id} vs {instance_school_id})")
             return False
         
-        # Granular campus check: Allow if school matches, even if campus differs
-        if campus_id and instance.campus_id != campus_id:
-            if instance.school_id != school_id:
-                logger.warning(f"User {user} denied access to subject {instance.id} (campus mismatch: {campus_id} vs {instance.campus_id}, school mismatch)")
-                return False
+        if campus_id and instance_campus_id != campus_id and instance_school_id != school_id:
+            logger.warning(f"User {user} denied access to level {instance.id} (campus mismatch: {campus_id} vs {instance_campus_id}, school mismatch)")
+            return False
         
         return True
 
@@ -2207,25 +2220,15 @@ class LevelCRUDView(
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, *args, **kwargs):
-        """
-        Update a level (full update) with tenancy enforcement.
-        """
         instance = self.get_object()
-        
         if not self.check_tenancy(instance) and not request.user.is_superuser:
             return Response({'error': 'You do not have permission to update this level'}, status=status.HTTP_403_FORBIDDEN)
-
         return self.update(request, *args, **kwargs)
 
     def patch(self, request, *args, **kwargs):
-        """
-        Update a level (partial update) with tenancy enforcement.
-        """
         instance = self.get_object()
-        
         if not self.check_tenancy(instance) and not request.user.is_superuser:
             return Response({'error': 'You do not have permission to update this level'}, status=status.HTTP_403_FORBIDDEN)
-
         return self.partial_update(request, *args, **kwargs)
 
     def delete(self, request, *args, **kwargs):
@@ -2277,19 +2280,77 @@ class TermsCRUDView(
             return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
         
         elif self.request.method == "DELETE":  # Delete
-            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus(), permissions.IsAdminUser()]
+            return [permissions.IsAuthenticated(), IsTeacherOrAdminInSchoolOrCampus()]
         
         return super().get_permissions()
     
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if not user.is_superuser:  # Superusers see all
-            if user.school:
-                queryset = queryset.filter(school=user.school)
-            if user.campus:
-                queryset = queryset.filter(campus=user.campus)
+        token = self.request.auth
+        logger.debug(f"User: {user}, School: {user.school}, Campus: {user.campus}")
+        logger.debug(f"Token: {token}")
+
+        if not user.is_superuser:
+            school_id = token.get('school_id') if token else (user.school.id if user.school else None)
+            campus_id = token.get('campus_id') if token else (user.campus.id if user.campus else None)
+
+            logger.debug(f"Filtering with school_id: {school_id}, campus_id: {campus_id}")
+
+            if school_id:
+                queryset = queryset.filter(school_id=school_id)
+            else:
+                logger.warning(f"User {user} has no school, returning empty queryset")
+                queryset = queryset.none()
+
+            if campus_id and queryset.filter(campus_id__isnull=False).exists():
+                queryset = queryset.filter(campus_id=campus_id)
+            else:
+                logger.debug("Skipping campus_id filter as terms have null campus or no campus filter needed")
+
+        logger.debug(f"Queryset count: {queryset.count()}, PK in kwargs: {self.kwargs.get('pk')}")
         return queryset
+
+    def get_object(self):
+        """
+        Retrieve a single term with tenancy enforcement.
+        """
+        queryset = self.get_queryset().select_related('school', 'campus')
+        pk = self.kwargs.get('pk')
+        logger.debug(f"Attempting to retrieve term with pk={pk} from queryset with {queryset.count()} items")
+        
+        try:
+            obj = queryset.get(pk=pk)
+            logger.debug(f"Found term: {obj}")
+        except Level.DoesNotExist:
+            logger.warning(f"Term with pk={pk} not found in filtered queryset")
+            raise generics.Http404("No Term matches the given query.")
+        
+        return obj
+    
+    def check_tenancy(self, instance):
+        """
+        Check if the instance belongs to the user's school/campus.
+        Allows actions within the same school even if campus differs.
+        """
+        user = self.request.user
+        school_id = self.request.auth.get('school_id') if self.request.auth else (user.school.id if user.school else None)
+        campus_id = self.request.auth.get('campus_id') if self.request.auth else (user.campus.id if user.campus else None)
+
+        instance_school_id = str(instance.school.id) if instance.school else None
+        instance_campus_id = str(instance.campus.id) if instance.campus else None
+
+        logger.debug(f"Checking tenancy: user school_id={school_id}, instance school_id={instance_school_id}")
+
+        if school_id and instance_school_id != school_id:
+            logger.warning(f"User {user} denied access to level {instance.id} (school mismatch: {school_id} vs {instance_school_id})")
+            return False
+        
+        if campus_id and instance_campus_id != campus_id and instance_school_id != school_id:
+            logger.warning(f"User {user} denied access to level {instance.id} (campus mismatch: {campus_id} vs {instance_campus_id}, school mismatch)")
+            return False
+        
+        return True
 
     def get(self, request, *args, **kwargs):
         if 'pk' in kwargs:
@@ -2316,14 +2377,27 @@ class TermsCRUDView(
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this term'}, status=status.HTTP_403_FORBIDDEN)
         return self.update(request, *args, **kwargs)
 
     def patch(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to update this term'}, status=status.HTTP_403_FORBIDDEN)
         return self.partial_update(request, *args, **kwargs)
 
     def delete(self, request, *args, **kwargs):
+        """
+        Delete a term with tenancy enforcement.
+        """
         instance = self.get_object()
-        logger.info(f"Terms '{instance.name}' deleted by {request.user}")
+        
+        if not self.check_tenancy(instance) and not request.user.is_superuser:
+            return Response({'error': 'You do not have permission to delete this term'}, status=status.HTTP_403_FORBIDDEN)
+
+        logger.info(f"Term '{instance.name}' deleted by {request.user}")
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
 

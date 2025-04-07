@@ -14,8 +14,8 @@ class CustomRefreshToken(RefreshToken):
         token['roles'] = [role.name for role in user.roles.all()]
         
         # Add school and campus details
-        token['school_id'] = user.school_id if user.school else None
-        token['campus_id'] = user.campus_id if user.campus else None
+        token['school_id'] = str(user.school_id) if user.school_id else None
+        token['campus_id'] = str(user.campus_id) if user.campus_id else None
         token['school_name'] = user.school.name if user.school else None
         token['campus_name'] = user.campus.name if user.campus else None
 
@@ -26,7 +26,8 @@ def create_jwt_pair_for_user(user: User):
 
     tokens = {
         'access_token': str(refresh.access_token),
-        'refresh_token': str(refresh)
+        'refresh_token': str(refresh),
+        'user_id': str(user.id),
     }
 
     return tokens

@@ -44,9 +44,9 @@ class Class(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_classes', null=True, blank=True) # All classes in the school
     campus = models.ForeignKey(Campus, on_delete=models.CASCADE, related_name='campus_classes', null=True, blank=True)
     name = models.CharField(max_length=100)
-    level_type = models.CharField(max_length=50 , null=True, blank=True)
     level = models.ForeignKey(Level, on_delete=models.CASCADE, related_name='classes', null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
     
     def __str__(self):
         return self.name
